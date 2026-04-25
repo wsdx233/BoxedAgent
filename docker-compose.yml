@@ -10,6 +10,10 @@ services:
       HOST: 0.0.0.0
       DATA_DIR: /var/lib/boxedagent
       BOX_IMAGE: boxedagent/ubuntu-dev:24.04
+      # 公网部署必须设置访问 Token；建议使用：openssl rand -base64 32
+      BOXEDAGENT_TOKEN: ${BOXEDAGENT_TOKEN:?set BOXEDAGENT_TOKEN in .env}
+      SESSION_SECRET: ${SESSION_SECRET:-change-me-with-openssl-rand-base64-32}
+      PUBLIC_ORIGIN: ${PUBLIC_ORIGIN:-}
       # 将你的模型 API Key 传给服务；创建 Box 时也可通过 env 配置传入容器
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}

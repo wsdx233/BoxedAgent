@@ -3,7 +3,7 @@ import type { AgentSessionRecord, BoxRecord, FileEntry, PiBoxConfig, PiModel, Se
 async function request<T>(url: string, init?: RequestInit): Promise<T> {
   const headers = new Headers(init?.headers);
   if (init?.body && !(init.body instanceof FormData) && !headers.has("content-type")) headers.set("content-type", "application/json");
-  const res = await fetch(url, { ...init, headers });
+  const res = await fetch(url, { ...init, headers, credentials: "include" });
   if (!res.ok) {
     const body = await res.json().catch(() => ({ error: res.statusText }));
     throw new Error(body.error ?? res.statusText);
@@ -13,6 +13,9 @@ async function request<T>(url: string, init?: RequestInit): Promise<T> {
 }
 
 export const api = {
+  authStatus: () => request<{ enabled: boolean; authenticated: boolean }>("/api/auth/status"),
+  login: (token: string) => request<{ ok: boolean; enabled?: boolean; error?: string }>("/api/auth/login", { method: "POST", body: JSON.stringify({ token }) }),
+  logout: () => request<{ ok: boolean }>("/api/auth/logout", { method: "POST" }),
   health: () => request<{ ok: boolean; docker: string; image?: unknown }>("/api/health"),
   imageStatus: (image: string) => request<{ image: string; available: boolean; source: string; error?: string }>(`/api/images/status?image=${encodeURIComponent(image)}`),
   ensureImage: (image: string) => request<{ image: string; available: boolean; source: string; error?: string }>("/api/images/ensure", { method: "POST", body: JSON.stringify({ image }) }),

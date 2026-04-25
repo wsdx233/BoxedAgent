@@ -11,6 +11,7 @@ export function CreateSessionModal({ box, onClose, onCreated }: { box: BoxRecord
   const [entries, setEntries] = useState<FileEntry[]>([]);
   const [loadingDirs, setLoadingDirs] = useState(false);
   const [newDirName, setNewDirName] = useState("");
+  const [showNewDir, setShowNewDir] = useState(false);
   const [creatingDir, setCreatingDir] = useState(false);
   const [error, setError] = useState<string>();
   const [models, setModels] = useState<PiModel[]>([]);
@@ -89,6 +90,7 @@ export function CreateSessionModal({ box, onClose, onCreated }: { box: BoxRecord
     try {
       await api.mkdir(box.id, nextPath);
       setNewDirName("");
+      setShowNewDir(false);
       setBrowsePath(nextPath);
       setCwd(browsePathToCwd(nextPath));
     } catch (err) {
@@ -127,14 +129,16 @@ export function CreateSessionModal({ box, onClose, onCreated }: { box: BoxRecord
             <div className="row"><FolderOpen size={15} /> <strong>{displayPath}</strong></div>
             <div className="row">
               <button type="button" className="button-tonal compact" disabled={browsePath === "."} onClick={up}><ArrowUp size={13} /> 上级</button>
+              <button type="button" className="button-tonal compact" onClick={() => { setShowNewDir(true); setNewDirName(""); }}><FolderPlus size={13} /> 新建目录</button>
               <button type="button" className="button-tonal compact" onClick={() => setCwdAndBrowse(displayPath)}>选择此目录</button>
             </div>
           </div>
-          <div className="dir-create-row">
+          {showNewDir && <div className="dir-create-row">
             <FolderPlus size={15} />
-            <input value={newDirName} onChange={(e) => setNewDirName(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); void createDirectory(); } }} placeholder="新建目录名" />
-            <button type="button" className="button-tonal compact" disabled={creatingDir || !newDirName.trim()} onClick={createDirectory}>{creatingDir ? <Loader2 size={13} className="spin" /> : <Plus size={13} />} 新建</button>
-          </div>
+            <input autoFocus value={newDirName} onChange={(e) => setNewDirName(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); void createDirectory(); } if (e.key === "Escape") { setShowNewDir(false); setNewDirName(""); } }} placeholder="新建目录名" />
+            <button type="button" className="button-tonal compact" disabled={creatingDir || !newDirName.trim()} onClick={createDirectory}>{creatingDir ? <Loader2 size={13} className="spin" /> : <Plus size={13} />} 确认</button>
+            <button type="button" className="button-tonal compact" onClick={() => { setShowNewDir(false); setNewDirName(""); }}>取消</button>
+          </div>}
           <div className="dir-list">
             {loadingDirs && <div className="empty-menu">正在读取目录…</div>}
             {!loadingDirs && dirs.length === 0 && <div className="empty-menu">当前目录没有子目录</div>}

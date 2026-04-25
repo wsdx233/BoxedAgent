@@ -16,6 +16,7 @@ import { registerEventWs } from "./ws/events.js";
 import { registerTerminalWs } from "./ws/terminal.js";
 import { registerCodeServerProxy } from "./routes/codeserver.js";
 import { agentManager } from "./agent/agent-manager.js";
+import { assertProductionAuthConfigured, registerAuth } from "./auth.js";
 
 export async function buildServer() {
   const app = Fastify({ logger: { level: env.LOG_LEVEL } });
@@ -32,7 +33,8 @@ export async function buildServer() {
     reply.status(statusCode).send({ error: err.message ?? "Internal server error", code: statusCode === 500 ? "INTERNAL" : "REQUEST_ERROR" });
   });
 
-  await app.register(cors, { origin: true, credentials: true });
+  await app.register(cors, { origin: corsOrigin(), credentials: true });
+  await registerAuth(app);
   await app.register(websocket, { options: { maxPayload: env.MAX_UPLOAD_MB * 1024 * 1024 } });
   await app.register(multipart, { limits: { fileSize: env.MAX_UPLOAD_MB * 1024 * 1024 } });
 
@@ -66,6 +68,7 @@ export async function buildServer() {
 }
 
 async function main() {
+  assertProductionAuthConfigured();
   await ensureDataDirs();
   await store.load();
   await store.pruneOrphanSessions();
@@ -98,6 +101,14 @@ async function main() {
   process.on("SIGINT", shutdown);
   process.on("SIGTERM", shutdown);
   await app.listen({ host: env.HOST, port: env.PORT });
+}
+
+function corsOrigin() {
+  if (env.PUBLIC_ORIGIN) {
+    const allowed = env.PUBLIC_ORIGIN.split(",").map((origin) => origin.trim()).filter(Boolean);
+    return allowed.length <= 1 ? allowed[0] : allowed;
+  }
+  return env.NODE_ENV === "development";
 }
 
 if (import.meta.url === `file://${process.argv[1]}`) {

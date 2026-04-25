@@ -21,6 +21,7 @@ BoxedAgent 是一个基于 Docker 的 agent + sandbox 平台：每个 **Box** �
 npm install
 cp .env.example .env
 # 编辑 .env，填入 ANTHROPIC_API_KEY / OPENAI_API_KEY 等
+# 如果要通过公网访问，请务必设置 BOXEDAGENT_TOKEN，例如：openssl rand -base64 32
 npm run build
 npm start
 ```
@@ -45,6 +46,11 @@ npm run dev:web  # Web: http://localhost:5173
 ## Docker Compose 部署
 
 ```bash
+cp .env.example .env
+# 编辑 .env，至少填入：
+# BOXEDAGENT_TOKEN=$(openssl rand -base64 32)
+# SESSION_SECRET=$(openssl rand -base64 32)
+# 可选：如果放在 HTTPS 反向代理后，设置 PUBLIC_ORIGIN=https://your-domain.example
 npm run docker:build-box
 sudo mkdir -p /var/lib/boxedagent
 sudo chown -R "$USER:$USER" /var/lib/boxedagent
@@ -98,6 +104,18 @@ PI_CODING_AGENT_DIR=/workspace/.boxedagent/pi-agent
 在 Web UI 右侧 `Pi` 标签页可编辑这些配置。
 
 ## API 概览
+
+如果设置了 `BOXEDAGENT_TOKEN`，除 `/api/auth/status`、`/api/auth/login`、`/api/auth/logout` 和 `/api/health` 外，API、WebSocket、terminal 与 code-server 代理都需要认证。浏览器登录后会获得 HttpOnly Cookie；脚本也可使用：
+
+```bash
+curl -H "Authorization: Bearer $BOXEDAGENT_TOKEN" http://localhost:8080/api/boxes
+```
+
+### Auth
+
+- `GET /api/auth/status`
+- `POST /api/auth/login`：`{ "token": "..." }`
+- `POST /api/auth/logout`
 
 ### 镜像
 
@@ -192,12 +210,14 @@ Prompt 示例：
 
 BoxedAgent 会让 agent 在容器中执行命令。生产环境请至少做到：
 
-1. 不要将服务裸露到公网；放在 VPN、SSO 或反向代理认证后。
-2. 为不同用户隔离 `DATA_DIR`、Docker network 与镜像权限。
-3. 对 Box 增加 CPU/内存限制，并按需加只读挂载、seccomp/AppArmor 策略。
-4. 谨慎传递 API Key；默认会把服务环境中的常见 LLM API Key 继承到新 Box。
-5. 定期清理克隆镜像和 workspace。
-6. 暴露 Docker socket 等同宿主机 root 能力；生产部署建议用专用宿主机或更严格的容器运行时策略。
+1. 必须设置长随机 `BOXEDAGENT_TOKEN`；`NODE_ENV=production` 且未设置 token 时服务会拒绝启动。
+2. 建议同时设置随机 `SESSION_SECRET`，并通过 HTTPS 反向代理访问；如有公网域名，设置 `PUBLIC_ORIGIN=https://...`。
+3. 更高安全等级下，仍建议放在 VPN、SSO 或反向代理认证后，并限制来源 IP。
+4. 为不同用户隔离 `DATA_DIR`、Docker network 与镜像权限。
+5. 对 Box 增加 CPU/内存限制，并按需加只读挂载、seccomp/AppArmor 策略。
+6. 谨慎传递 API Key；默认会把服务环境中的常见 LLM API Key 继承到新 Box。
+7. 定期清理克隆镜像和 workspace。
+8. 暴露 Docker socket 等同宿主机 root 能力；生产部署建议用专用宿主机或更严格的容器运行时策略。
 
 ## 项目结构
 
