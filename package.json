@@ -1,0 +1,26 @@
+{
+  "name": "boxedagent",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Docker based agent+sandbox platform powered by pi mono",
+  "type": "module",
+  "workspaces": [
+    "server",
+    "web"
+  ],
+  "scripts": {
+    "dev": "npm run dev -w @boxedagent/server",
+    "dev:web": "npm run dev -w @boxedagent/web",
+    "build": "npm run build -w @boxedagent/server && npm run build -w @boxedagent/web",
+    "start": "npm run start -w @boxedagent/server",
+    "typecheck": "npm run typecheck -w @boxedagent/server && npm run typecheck -w @boxedagent/web",
+    "lint": "npm run lint -w @boxedagent/server && npm run lint -w @boxedagent/web",
+    "docker:build-box": "docker build -t boxedagent/ubuntu-dev:24.04 -f docker/box.Dockerfile docker",
+    "compose:up": "docker compose up --build",
+    "compose:down": "docker compose down"
+  },
+  "engines": {
+    "node": ">=22.0.0"
+  },
+  "license": "MIT"
+}

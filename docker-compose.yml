@@ -1,0 +1,21 @@
+services:
+  boxedagent:
+    build: .
+    container_name: boxedagent
+    ports:
+      - "8080:8080"
+    environment:
+      NODE_ENV: production
+      PORT: 8080
+      HOST: 0.0.0.0
+      DATA_DIR: /var/lib/boxedagent
+      BOX_IMAGE: boxedagent/ubuntu-dev:24.04
+      # 将你的模型 API Key 传给服务；创建 Box 时也可通过 env 配置传入容器
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      GOOGLE_API_KEY: ${GOOGLE_API_KEY:-}
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      # 注意：子 Box 容器由宿主机 Docker daemon 创建，因此 DATA_DIR 必须是宿主机也存在的绝对路径
+      - /var/lib/boxedagent:/var/lib/boxedagent
+    restart: unless-stopped
