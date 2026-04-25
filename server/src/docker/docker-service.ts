@@ -261,6 +261,17 @@ print(json.dumps(items))`;
     if (result.exitCode !== 0) throw badRequest(result.stderr || result.stdout || "mkdir failed");
   }
 
+  async directoryExists(box: BoxRecord, relPath: string): Promise<boolean> {
+    const script = "import os,sys; root='/workspace'; p=os.path.abspath(os.path.join(root, sys.argv[1])); assert p==root or p.startswith(root+os.sep); print('1' if os.path.isdir(p) else '0')";
+    const result = await this.exec(box, ["python3", "-c", script, relPath]);
+    if (result.exitCode !== 0) throw badRequest(result.stderr || result.stdout || "failed to check directory");
+    return result.stdout.trim() === "1";
+  }
+
+  async assertDirectory(box: BoxRecord, relPath: string): Promise<void> {
+    if (!(await this.directoryExists(box, relPath))) throw badRequest(`directory does not exist: /workspace/${relPath === "." ? "" : relPath}`.replace(/\/$/, ""));
+  }
+
   async deletePath(box: BoxRecord, relPath: string): Promise<void> {
     const result = await this.exec(box, ["python3", "-c", "import os,sys,shutil; root='/workspace'; p=os.path.abspath(os.path.join(root, sys.argv[1])); assert p!=root and p.startswith(root+os.sep); shutil.rmtree(p) if os.path.isdir(p) and not os.path.islink(p) else os.remove(p)", relPath]);
     if (result.exitCode !== 0) throw badRequest(result.stderr || result.stdout || "delete failed");

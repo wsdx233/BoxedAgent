@@ -35,6 +35,7 @@ export class AgentRuntime {
   private stdoutBuffer = "";
   private decoder = new StringDecoder("utf8");
   private stopped = false;
+  private workRequested = false;
   private liveStatus?: AgentSessionStatus;
 
   constructor(public readonly record: AgentSessionRecord, private readonly box: BoxRecord) {}
@@ -46,8 +47,9 @@ export class AgentRuntime {
   async start(): Promise<void> {
     if (this.stream && !this.stopped) return;
     this.stopped = false;
-    await store.patchSession(this.record.id, { status: "starting", error: undefined });
-    this.publishStatus("starting");
+    const initialStatus: AgentSessionStatus = this.workRequested ? "working" : "starting";
+    await store.patchSession(this.record.id, { status: initialStatus, error: undefined });
+    this.publishStatus(initialStatus);
 
     try {
       const startingBox = await store.patchBox(this.box.id, { status: "starting", error: undefined });
@@ -65,7 +67,9 @@ export class AgentRuntime {
       if (thinkingLevel) args.push("--thinking", thinkingLevel);
       if (this.box.pi.extraArgs?.length) args.push(...this.box.pi.extraArgs);
 
-      this.exec = await dockerService.createInteractiveExec(this.box, args, { cwd: normalizeSessionCwd(this.record.cwd), tty: false, env: piRuntimeEnv(this.box) });
+      const cwd = normalizeSessionCwd(this.record.cwd);
+      await dockerService.assertDirectory(this.box, cwdToWorkspaceRel(cwd));
+      this.exec = await dockerService.createInteractiveExec(this.box, args, { cwd, tty: false, env: piRuntimeEnv(this.box) });
       const stream = await this.exec.start({ hijack: true, stdin: true });
       this.stream = stream as NodeJS.ReadWriteStream;
 
@@ -78,8 +82,9 @@ export class AgentRuntime {
       stream.on("close", () => this.onClose());
       stream.on("end", () => this.onClose());
 
-      await store.patchSession(this.record.id, { status: "running", lastActiveAt: new Date().toISOString() });
-      this.publishStatus("running");
+      const readyStatus: AgentSessionStatus = this.workRequested ? "working" : "running";
+      await store.patchSession(this.record.id, { status: readyStatus, lastActiveAt: new Date().toISOString() });
+      this.publishStatus(readyStatus);
       await this.refreshSessionState().catch((error) => {
         wsHub.publishSession(this.record.id, { type: "agent_warning", warning: error instanceof Error ? error.message : String(error) });
       });
@@ -92,8 +97,20 @@ export class AgentRuntime {
   }
 
   async prompt(payload: PromptPayload) {
+    this.workRequested = true;
+    await store.patchSession(this.record.id, { status: "working", lastActiveAt: new Date().toISOString() });
+    this.publishStatus("working");
     await this.start();
-    return this.send({ type: "prompt", ...payload });
+    await store.patchSession(this.record.id, { status: "working", lastActiveAt: new Date().toISOString() });
+    this.publishStatus("working");
+    try {
+      return await this.send({ type: "prompt", ...payload });
+    } catch (error) {
+      this.workRequested = false;
+      await store.patchSession(this.record.id, { status: "running", lastActiveAt: new Date().toISOString() }).catch(() => undefined);
+      this.publishStatus("running");
+      throw error;
+    }
   }
 
   async steer(message: string) {
@@ -158,14 +175,27 @@ export class AgentRuntime {
   }
 
   async compact(customInstructions?: string): Promise<unknown> {
+    this.workRequested = true;
+    await store.patchSession(this.record.id, { status: "working", lastActiveAt: new Date().toISOString() });
+    this.publishStatus("working");
     await this.start();
+    await store.patchSession(this.record.id, { status: "working", lastActiveAt: new Date().toISOString() });
+    this.publishStatus("working");
     const command: Record<string, unknown> = { type: "compact" };
     if (customInstructions?.trim()) command.customInstructions = customInstructions.trim();
-    return this.send(command, 600_000);
+    try {
+      return await this.send(command, 600_000);
+    } catch (error) {
+      this.workRequested = false;
+      await store.patchSession(this.record.id, { status: "running", lastActiveAt: new Date().toISOString() }).catch(() => undefined);
+      this.publishStatus("running");
+      throw error;
+    }
   }
 
   async stop() {
     this.stopped = true;
+    this.workRequested = false;
     for (const pending of this.pending.values()) {
       clearTimeout(pending.timer);
       pending.reject(new Error("agent stopped"));
@@ -243,12 +273,15 @@ export class AgentRuntime {
     }
 
     const eventStatus = sessionStatusForAgentEvent(message);
-    void store.patchSession(this.record.id, { lastActiveAt: new Date().toISOString(), status: eventStatus ?? "running" }).catch(() => undefined);
+    if (eventStatus === "working") this.workRequested = true;
+    if (eventStatus === "running") this.workRequested = false;
+    void store.patchSession(this.record.id, { lastActiveAt: new Date().toISOString(), status: eventStatus ?? (this.workRequested ? "working" : "running") }).catch(() => undefined);
     if (eventStatus) this.publishStatus(eventStatus);
     wsHub.publishSession(this.record.id, { type: "agent_event", event: message });
   }
 
   private fail(error: unknown) {
+    this.workRequested = false;
     const text = error instanceof Error ? error.message : String(error);
     void store.patchSession(this.record.id, { status: "error", error: text });
     this.publishStatus("error", text);
@@ -257,6 +290,7 @@ export class AgentRuntime {
   private onClose() {
     if (this.stopped) return;
     this.stopped = true;
+    this.workRequested = false;
     for (const pending of this.pending.values()) {
       clearTimeout(pending.timer);
       pending.reject(new Error("agent process exited"));
@@ -306,4 +340,10 @@ function normalizeSessionCwd(cwd?: string): string {
   const value = cwd?.trim() || "/workspace";
   if (value === "/workspace" || value.startsWith("/workspace/")) return value.replace(/\/+$/, "") || "/workspace";
   return "/workspace";
+}
+
+function cwdToWorkspaceRel(cwd?: string): string {
+  const normalized = normalizeSessionCwd(cwd);
+  if (normalized === "/workspace") return ".";
+  return normalized.slice("/workspace/".length) || ".";
 }

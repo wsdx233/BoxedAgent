@@ -1,6 +1,6 @@
 import { FormEvent, useEffect, useMemo, useState } from "react";
 import { createPortal } from "react-dom";
-import { ArrowUp, Bot, CheckCircle2, Folder, FolderOpen, Loader2, Plus } from "lucide-react";
+import { ArrowUp, Bot, CheckCircle2, CircleAlert, Folder, FolderOpen, FolderPlus, Loader2, Plus } from "lucide-react";
 import { api } from "../lib/api";
 import type { BoxRecord, FileEntry, PiModel } from "../lib/types";
 
@@ -10,6 +10,9 @@ export function CreateSessionModal({ box, onClose, onCreated }: { box: BoxRecord
   const [browsePath, setBrowsePath] = useState(".");
   const [entries, setEntries] = useState<FileEntry[]>([]);
   const [loadingDirs, setLoadingDirs] = useState(false);
+  const [newDirName, setNewDirName] = useState("");
+  const [creatingDir, setCreatingDir] = useState(false);
+  const [error, setError] = useState<string>();
   const [models, setModels] = useState<PiModel[]>([]);
   const [loadingModels, setLoadingModels] = useState(false);
   const [modelSearch, setModelSearch] = useState("");
@@ -73,15 +76,40 @@ export function CreateSessionModal({ box, onClose, onCreated }: { box: BoxRecord
     }
   }
 
+  async function createDirectory() {
+    const name = newDirName.trim();
+    if (!name) return;
+    if (name.includes("/") || name.includes("\\") || name === "." || name === ".." || name.includes("..")) {
+      setError("目录名不能包含 /、\\ 或 ..");
+      return;
+    }
+    const nextPath = browsePath === "." ? name : `${browsePath}/${name}`;
+    setCreatingDir(true);
+    setError(undefined);
+    try {
+      await api.mkdir(box.id, nextPath);
+      setNewDirName("");
+      setBrowsePath(nextPath);
+      setCwd(browsePathToCwd(nextPath));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setCreatingDir(false);
+    }
+  }
+
   async function submit(e: FormEvent) {
     e.preventDefault();
+    const normalizedCwd = normalizeCwd(cwd);
     setCreating(true);
+    setError(undefined);
     try {
-      const session = await api.createSession({ boxId: box.id, name: name.trim() || undefined, cwd: normalizeCwd(cwd), provider: selectedModel.provider, model: selectedModel.modelId, autostart: true });
+      await api.listFiles(box.id, cwdToBrowsePath(normalizedCwd));
+      const session = await api.createSession({ boxId: box.id, name: name.trim() || undefined, cwd: normalizedCwd, provider: selectedModel.provider, model: selectedModel.modelId, autostart: true });
       onCreated(session.id);
       onClose();
     } catch (err) {
-      alert(err instanceof Error ? err.message : String(err));
+      setError(err instanceof Error ? err.message : String(err));
     } finally {
       setCreating(false);
     }
@@ -94,6 +122,27 @@ export function CreateSessionModal({ box, onClose, onCreated }: { box: BoxRecord
       <form className="form" onSubmit={submit}>
         <label>Session 名称<input value={name} onChange={(e) => setName(e.target.value)} /></label>
         <label>工作目录<input value={cwd} onChange={(e) => setCwdAndBrowse(e.target.value)} onBlur={(e) => setCwdAndBrowse(normalizeCwd(e.target.value))} placeholder="/workspace 或 /workspace/subdir" /></label>
+        <div className="dir-picker">
+          <div className="dir-picker-head">
+            <div className="row"><FolderOpen size={15} /> <strong>{displayPath}</strong></div>
+            <div className="row">
+              <button type="button" className="button-tonal compact" disabled={browsePath === "."} onClick={up}><ArrowUp size={13} /> 上级</button>
+              <button type="button" className="button-tonal compact" onClick={() => setCwdAndBrowse(displayPath)}>选择此目录</button>
+            </div>
+          </div>
+          <div className="dir-create-row">
+            <FolderPlus size={15} />
+            <input value={newDirName} onChange={(e) => setNewDirName(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); void createDirectory(); } }} placeholder="新建目录名" />
+            <button type="button" className="button-tonal compact" disabled={creatingDir || !newDirName.trim()} onClick={createDirectory}>{creatingDir ? <Loader2 size={13} className="spin" /> : <Plus size={13} />} 新建</button>
+          </div>
+          <div className="dir-list">
+            {loadingDirs && <div className="empty-menu">正在读取目录…</div>}
+            {!loadingDirs && dirs.length === 0 && <div className="empty-menu">当前目录没有子目录</div>}
+            {!loadingDirs && dirs.map((entry) => <button type="button" key={entry.path} className="dir-row" onClick={() => enterDir(entry)}>
+              <Folder size={14} /> <span>{entry.name}</span>
+            </button>)}
+          </div>
+        </div>
         <div className="session-model-picker">
           <div className="dir-picker-head">
             <div className="row"><Bot size={15} /> <strong>模型</strong><span className="small">{selectedModel.provider && selectedModel.modelId ? `${selectedModel.provider}/${selectedModel.modelId}` : "使用 Box 默认"}</span></div>
@@ -117,22 +166,7 @@ export function CreateSessionModal({ box, onClose, onCreated }: { box: BoxRecord
             {!loadingModels && models.length === 0 && <div className="empty-menu">未加载到模型；仍可使用 Box 默认模型。</div>}
           </div>
         </div>
-        <div className="dir-picker">
-          <div className="dir-picker-head">
-            <div className="row"><FolderOpen size={15} /> <strong>{displayPath}</strong></div>
-            <div className="row">
-              <button type="button" className="button-tonal compact" disabled={browsePath === "."} onClick={up}><ArrowUp size={13} /> 上级</button>
-              <button type="button" className="button-tonal compact" onClick={() => setCwdAndBrowse(displayPath)}>选择此目录</button>
-            </div>
-          </div>
-          <div className="dir-list">
-            {loadingDirs && <div className="empty-menu">正在读取目录…</div>}
-            {!loadingDirs && dirs.length === 0 && <div className="empty-menu">当前目录没有子目录</div>}
-            {!loadingDirs && dirs.map((entry) => <button type="button" key={entry.path} className="dir-row" onClick={() => enterDir(entry)}>
-              <Folder size={14} /> <span>{entry.name}</span>
-            </button>)}
-          </div>
-        </div>
+        {error && <div className="notice error"><CircleAlert size={15} /> <span>{error}</span></div>}
         <div className="row space">
           <button type="button" onClick={onClose}>取消</button>
           <button className="primary" disabled={creating}><Plus size={15} /> {creating ? "创建中…" : "创建 Session"}</button>

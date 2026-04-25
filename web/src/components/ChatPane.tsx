@@ -1,10 +1,11 @@
 import { FormEvent, type ReactNode, useEffect, useMemo, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import { Archive, Bot, Brain, CheckCircle2, ChevronDown, CircleAlert, Loader2, Paperclip, Send, Sparkles, Square, Wrench } from "lucide-react";
+import rehypeHighlight from "rehype-highlight";
+import { Archive, Bot, Brain, CheckCircle2, ChevronDown, CircleAlert, Copy, Loader2, Paperclip, Send, Sparkles, Square, Wrench } from "lucide-react";
 import { api, wsUrl } from "../lib/api";
 import { newId } from "../lib/id";
-import type { AgentSessionRecord, ChatMessage, PiModel, SessionStats, ThinkingLevel } from "../lib/types";
+import type { AgentSessionRecord, ChatMessage, PiModel, SessionStats, ThinkingLevel, ToolResultMeta } from "../lib/types";
 import { useAppStore } from "../state/app";
 
 interface QueueState {
@@ -59,6 +60,7 @@ export function ChatPane({ boxId, sessionId }: { boxId?: string; sessionId?: str
   const bottomRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const composerRef = useRef<HTMLFormElement>(null);
+  const expectingTurnRef = useRef(false);
   const session = sessions.find((s) => s.id === sessionId);
   const messages = sessionId ? messagesBySession[sessionId] ?? [] : [];
   const canSend = text.trim().length > 0 || images.length > 0;
@@ -104,25 +106,45 @@ export function ChatPane({ boxId, sessionId }: { boxId?: string; sessionId?: str
   useEffect(() => {
     if (!sessionId) return;
     setQueue({ steering: [], followUp: [] });
+    expectingTurnRef.current = false;
     setTurnActive(false);
     const ws = new WebSocket(wsUrl(`/ws/sessions/${sessionId}/events`));
     ws.onmessage = (event) => {
       const msg = JSON.parse(event.data);
       if (msg.type === "session_status") {
-        if (msg.status === "working") setTurnActive(true);
-        if (msg.status === "running" || msg.status === "stopped" || msg.status === "error") setTurnActive(false);
-        if (typeof msg.status === "string") patchSessionLocal({ status: msg.status as any, error: msg.error });
+        if (msg.status === "working") {
+          expectingTurnRef.current = true;
+          setTurnActive(true);
+        }
+        if (msg.status === "running") {
+          if (!expectingTurnRef.current) setTurnActive(false);
+        }
+        if (msg.status === "stopped" || msg.status === "error") {
+          expectingTurnRef.current = false;
+          setTurnActive(false);
+        }
+        if (typeof msg.status === "string") {
+          const localStatus = expectingTurnRef.current && (msg.status === "starting" || msg.status === "running") ? "working" : msg.status;
+          patchSessionLocal({ status: localStatus as any, error: msg.error });
+        }
       }
       if (msg.type !== "agent_event") return;
       const e = msg.event;
-      if (e.type === "agent_start" || e.type === "turn_start" || e.type === "message_start") setTurnActive(true);
+      if (e.type === "agent_start" || e.type === "turn_start" || e.type === "message_start") {
+        expectingTurnRef.current = true;
+        setTurnActive(true);
+      }
       if (e.type === "agent_end" || e.type === "turn_end" || e.type === "message_end") {
+        expectingTurnRef.current = false;
         setTurnActive(false);
         void refreshSessionStats(sessionId);
       }
       if (e.type === "message_update") {
         const delta = e.assistantMessageEvent;
-        if (delta?.type === "start" || delta?.type === "text_start" || delta?.type === "thinking_start" || delta?.type === "toolcall_start") setTurnActive(true);
+        if (delta?.type === "start" || delta?.type === "text_start" || delta?.type === "thinking_start" || delta?.type === "toolcall_start") {
+          expectingTurnRef.current = true;
+          setTurnActive(true);
+        }
         if (delta?.type === "text_delta") updateLastAssistant(sessionId, String(delta.delta ?? ""));
         if (delta?.type === "thinking_delta") updateLastAssistantThinking(sessionId, String(delta.delta ?? ""));
         if (delta?.type === "toolcall_start") {
@@ -143,28 +165,32 @@ export function ChatPane({ boxId, sessionId }: { boxId?: string; sessionId?: str
           upsertToolMessage(sessionId, toolCallId, { toolCallId, toolName: tool.name ?? "tool", toolArgs: tool.args, toolStatus: "pending" });
         }
         if (delta?.type === "done" || delta?.type === "error") {
+          expectingTurnRef.current = false;
           setTurnActive(false);
           void refreshSessionStats(sessionId);
         }
       }
       if (e.type === "tool_execution_start") {
+        expectingTurnRef.current = true;
         setTurnActive(true);
         upsertToolMessage(sessionId, e.toolCallId ?? `${e.toolName}-${Date.now()}`, { toolName: e.toolName, toolArgs: e.args, toolStatus: "running" });
       }
       if (e.type === "tool_execution_update") {
-        upsertToolMessage(sessionId, e.toolCallId ?? `${e.toolName}-${Date.now()}`, { toolName: e.toolName, toolArgs: e.args, toolResult: resultToText(e.partialResult), toolStatus: "running" });
+        upsertToolMessage(sessionId, e.toolCallId ?? `${e.toolName}-${Date.now()}`, { toolName: e.toolName, toolArgs: e.args, toolResult: resultToText(e.partialResult), toolResultMeta: toolResultMeta(e.partialResult), toolStatus: "running" });
       }
       if (e.type === "tool_execution_end") {
-        upsertToolMessage(sessionId, e.toolCallId ?? `${e.toolName}-${Date.now()}`, { toolName: e.toolName, toolArgs: e.args, toolResult: resultToText(e.result), toolStatus: e.isError ? "error" : "done" });
+        upsertToolMessage(sessionId, e.toolCallId ?? `${e.toolName}-${Date.now()}`, { toolName: e.toolName, toolArgs: e.args, toolResult: resultToText(e.result), toolResultMeta: toolResultMeta(e.result), toolStatus: e.isError ? "error" : "done" });
       }
       if (e.type === "queue_update") {
         setQueue({ steering: e.steering ?? [], followUp: e.followUp ?? [] });
       }
       if (e.type === "compaction_start") {
+        expectingTurnRef.current = true;
         setTurnActive(true);
         appendMessage(sessionId, { id: newId(), role: "system", text: `正在压缩上下文：${e.reason ?? "manual"}`, timestamp: Date.now() });
       }
       if (e.type === "compaction_end") {
+        expectingTurnRef.current = false;
         setTurnActive(false);
         appendMessage(sessionId, { id: newId(), role: "system", text: e.aborted ? "上下文压缩已取消" : `上下文压缩完成${e.willRetry ? "，将自动重试" : ""}${e.errorMessage ? `：${e.errorMessage}` : ""}`, timestamp: Date.now() });
         void refreshSessionStats(sessionId);
@@ -184,13 +210,16 @@ export function ChatPane({ boxId, sessionId }: { boxId?: string; sessionId?: str
     const message = text.trimEnd();
     appendMessage(sessionId, { id: newId(), role: "user", text: message || `[${images.length} 张图片]`, timestamp: Date.now() });
     setText("");
+    expectingTurnRef.current = true;
     setTurnActive(true);
+    patchSessionLocal({ status: "working" as AgentSessionRecord["status"] });
     const modeToUse = modeOverride ?? sendMode;
     const payload: any = { message, images: images.map(({ name: _name, ...img }) => img) };
     if (modeToUse !== "normal") payload.streamingBehavior = modeToUse;
     setImages([]);
     try { await api.prompt(sessionId, payload); }
     catch (err) {
+      expectingTurnRef.current = false;
       setTurnActive(false);
       appendMessage(sessionId, { id: newId(), role: "system", text: `发送失败：${err instanceof Error ? err.message : String(err)}`, timestamp: Date.now() });
     }
@@ -201,9 +230,12 @@ export function ChatPane({ boxId, sessionId }: { boxId?: string; sessionId?: str
     appendMessage(sessionId, { id: newId(), role: "system", text: customInstructions ? `已触发手动上下文压缩。自定义要求：${customInstructions}` : "已触发手动上下文压缩。", timestamp: Date.now() });
     setText("");
     setImages([]);
+    expectingTurnRef.current = true;
     setTurnActive(true);
+    patchSessionLocal({ status: "working" as AgentSessionRecord["status"] });
     try { await api.compactSession(sessionId, { customInstructions }); }
     catch (err) {
+      expectingTurnRef.current = false;
       setTurnActive(false);
       appendMessage(sessionId, { id: newId(), role: "system", text: `压缩失败：${err instanceof Error ? err.message : String(err)}`, timestamp: Date.now() });
     }
@@ -338,7 +370,9 @@ export function ChatPane({ boxId, sessionId }: { boxId?: string; sessionId?: str
     setOpenMenu(undefined);
     try {
       await api.abortSession(sessionId);
+      expectingTurnRef.current = false;
       setTurnActive(false);
+      patchSessionLocal({ status: "running" as AgentSessionRecord["status"] });
       void refreshSessionStats(sessionId);
     } catch (err) {
       appendMessage(sessionId, { id: newId(), role: "system", text: `中止失败：${err instanceof Error ? err.message : String(err)}`, timestamp: Date.now() });
@@ -546,22 +580,26 @@ function ToolPreview({ message }: { message: ChatMessage }) {
   const name = (message.toolName ?? "tool").toLowerCase();
   const args = asRecord(message.toolArgs);
   const result = message.toolResult ?? "";
+  const meta = enrichToolMeta(message.toolResultMeta ?? toolResultMeta(result), result);
   const path = stringValue(args.path ?? args.file ?? args.filename);
 
   if (name === "write" || name === "edit") {
-    const content = stringValue(args.content ?? args.newText ?? args.new_text ?? args.replacement ?? result);
+    const content = stringValue(args.content ?? args.newText ?? args.new_text ?? args.replacement ?? args.text ?? args.value);
+    const oldContent = stringValue(args.oldText ?? args.old_text ?? args.old ?? args.original);
+    const diffLines = content ? (name === "edit" && oldContent ? buildUnifiedDiff(oldContent, content, path) : buildWriteDiff(content, path)) : [];
     return <div className="tool-preview">
-      <div className="tool-preview-head"><span>{name === "write" ? "写入" : "编辑"}</span><code>{path || "file"}</code><span className="small">{lineCount(content)} lines</span></div>
-      {content && <CodePreview text={content} />}
-      {name === "edit" && stringValue(args.oldText ?? args.old_text) && <details className="tool-mini-details"><summary>原片段</summary><CodePreview text={stringValue(args.oldText ?? args.old_text)} /></details>}
+      <div className="tool-preview-head"><span>{name === "write" ? "写入 diff" : "编辑 diff"}</span><code>{path || "file"}</code></div>
+      {diffLines.length > 0 ? <DiffPreview lines={diffLines} /> : result ? <CodePreview text={result} meta={meta} /> : <div className="empty-menu">没有可显示的写入内容</div>}
+      {result && content && <details className="tool-mini-details"><summary>工具结果</summary><CodePreview text={result} meta={meta} maxLines={10} /></details>}
     </div>;
   }
 
   if (name === "read") {
-    const limit = args.limit ? ` · limit ${String(args.limit)}` : "";
+    const limit = args.limit ? `limit ${String(args.limit)}` : "";
+    const display = result || (message.toolArgs !== undefined ? safeJson(message.toolArgs) : "");
     return <div className="tool-preview">
-      <div className="tool-preview-head"><span>读取</span><code>{path || "file"}</code><span className="small">{limit}</span></div>
-      {result ? <CodePreview text={result} /> : message.toolArgs !== undefined && <CodePreview text={safeJson(message.toolArgs)} />}
+      <div className="tool-preview-head"><span>读取</span><code>{path || "file"}</code>{limit && <span className="small">{limit}</span>}</div>
+      {display && <CodePreview text={display} meta={meta} />}
     </div>;
   }
 
@@ -569,25 +607,90 @@ function ToolPreview({ message }: { message: ChatMessage }) {
     const command = stringValue(args.command ?? args.cmd ?? message.toolArgs);
     return <div className="tool-preview">
       {command && <><div className="tool-preview-head"><span>命令</span></div><CodePreview text={command} maxLines={8} /></>}
-      {result && <><div className="tool-preview-head"><span>输出预览</span><span className="small">{lineCount(result)} lines</span></div><CodePreview text={result} /></>}
+      {result && <><div className="tool-preview-head"><span>输出预览</span></div><CodePreview text={result} meta={meta} /></>}
     </div>;
   }
 
   return <div className="tool-preview">
     {message.toolArgs !== undefined && <><div className="tool-preview-head"><span>参数</span></div><CodePreview text={safeJson(message.toolArgs)} maxLines={10} /></>}
-    {result && <><div className="tool-preview-head"><span>输出预览</span><span className="small">{lineCount(result)} lines</span></div><CodePreview text={result} /></>}
+    {result && <><div className="tool-preview-head"><span>输出预览</span></div><CodePreview text={result} meta={meta} /></>}
   </div>;
 }
 
-function CodePreview({ text, maxLines = 18 }: { text: string; maxLines?: number }) {
+function DiffPreview({ lines, maxLines = 240 }: { lines: DiffLine[]; maxLines?: number }) {
+  const clipped = lines.length > maxLines;
+  const visible = clipped ? lines.slice(0, maxLines) : lines;
+  const text = lines.map((line) => line.type === "add" ? `+${line.text}` : line.type === "del" ? `-${line.text}` : line.type === "meta" ? line.text : ` ${line.text}`).join("\n");
+  return <div className="diff-preview-shell">
+    <div className="code-preview-toolbar"><span>Unified diff</span><CopyButton text={text} /></div>
+    <div className="diff-preview" role="region" aria-label="diff preview">
+      {visible.map((line, idx) => <div key={idx} className={`diff-line ${line.type}`}><span className="diff-sign">{line.type === "add" ? "+" : line.type === "del" ? "-" : line.type === "meta" ? "" : " "}</span><span className="diff-text">{line.text || " "}</span></div>)}
+      {clipped && <div className="diff-line meta"><span className="diff-sign" /><span className="diff-text">… 还有 {lines.length - maxLines} 行 diff 未展开，共 {lines.length} 行</span></div>}
+    </div>
+  </div>;
+}
+
+function CodePreview({ text, maxLines = 18, meta }: { text: string; maxLines?: number; meta?: ToolResultMeta }) {
   const lines = text.split("\n");
   const clipped = lines.length > maxLines;
   const shown = clipped ? lines.slice(0, maxLines).join("\n") : text;
-  return <pre className="code-preview">{shown}{clipped ? `\n… ${lines.length - maxLines} more lines` : ""}</pre>;
+  const enriched = enrichToolMeta(meta, text);
+  const suffix = codePreviewSuffix(enriched, lines.length, maxLines, clipped);
+  return <div className="code-preview-shell">
+    <div className="code-preview-toolbar"><CopyButton text={text} /></div>
+    <pre className="code-preview">{shown}{suffix ? `\n${suffix}` : ""}</pre>
+  </div>;
+}
+
+function codePreviewSuffix(meta: ToolResultMeta | undefined, actualLines: number, maxLines: number, clipped: boolean): string {
+  const parts: string[] = [];
+  if (clipped) parts.push(`本地折叠 ${actualLines - maxLines} 行，共 ${actualLines} 行`);
+  if (meta) {
+    const shown = clipped ? maxLines : meta.shownLines;
+    if (meta.totalLines && shown && meta.totalLines !== shown) parts.push(`工具结果显示 ${shown}/${meta.totalLines} 行`);
+    else if (!clipped && meta.totalLines && meta.truncated) parts.push(`工具结果共 ${meta.totalLines} 行`);
+    if (meta.omittedLines) parts.push(`省略 ${meta.omittedLines} 行`);
+    if (meta.totalBytes) parts.push(`${formatBytes(meta.shownBytes ?? meta.totalBytes)}${meta.shownBytes && meta.shownBytes !== meta.totalBytes ? `/${formatBytes(meta.totalBytes)}` : ""}`);
+    if (meta.truncated) parts.push("已截断");
+    if (meta.label) parts.push(meta.label);
+  }
+  return parts.length ? `… ${Array.from(new Set(parts)).join("；")}` : "";
 }
 
 function MarkdownText({ text }: { text: string }) {
-  return <div className="markdown-body"><ReactMarkdown remarkPlugins={[remarkGfm]}>{text}</ReactMarkdown></div>;
+  return <div className="markdown-body"><ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeHighlight]} components={{ pre: MarkdownPre }}>{text}</ReactMarkdown></div>;
+}
+
+function MarkdownPre({ children, node: _node, ...props }: any) {
+  const codeText = extractText(children).replace(/\n$/, "");
+  const lang = languageFromCodeNode(children);
+  return <div className="markdown-code-block">
+    <div className="markdown-code-toolbar"><span>{lang || "code"}</span><CopyButton text={codeText} /></div>
+    <pre {...props}>{children}</pre>
+  </div>;
+}
+
+function CopyButton({ text }: { text: string }) {
+  const [copied, setCopied] = useState(false);
+  async function copy() {
+    try {
+      await navigator.clipboard.writeText(text);
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 1200);
+    } catch {
+      const area = document.createElement("textarea");
+      area.value = text;
+      area.style.position = "fixed";
+      area.style.opacity = "0";
+      document.body.appendChild(area);
+      area.select();
+      document.execCommand("copy");
+      area.remove();
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 1200);
+    }
+  }
+  return <button type="button" className="copy-button" onClick={copy}><Copy size={13} /> {copied ? "已复制" : "复制"}</button>;
 }
 
 async function filesToImages(files: Iterable<File> | null) {
@@ -628,7 +731,8 @@ function normalizePiMessages(messages: any[]): ChatMessage[] {
       toolName: m.name ?? m.toolName ?? prior.toolName ?? "tool",
       toolArgs: m.args ?? m.arguments ?? prior.toolArgs,
       toolStatus: m.isError ? "error" : "done",
-      toolResult: contentToText(m.content) || m.result || JSON.stringify(m),
+      toolResult: contentToText(m.content) || resultToText(m.result) || JSON.stringify(m),
+      toolResultMeta: toolResultMeta(m.result ?? m.content),
       timestamp
     });
   });
@@ -667,6 +771,139 @@ function resultToText(result: any): string {
   if (Array.isArray(result?.content)) return result.content.map((item: any) => item?.text ?? item?.content ?? JSON.stringify(item)).join("\n");
   if (result.text) return String(result.text);
   return safeJson(result);
+}
+
+type DiffLine = { type: "add" | "del" | "ctx" | "meta"; text: string };
+
+function toolResultMeta(result: any): ToolResultMeta | undefined {
+  if (result === undefined || result === null) return undefined;
+  const records = collectRecords(result);
+  const text = typeof result === "string" ? result : resultToText(result);
+  const meta: ToolResultMeta = {};
+  const totalLines = numericMeta(records, ["totalLines", "total_lines", "lineCount", "line_count", "totalLineCount", "total_line_count", "linesTotal"]);
+  const shownLines = numericMeta(records, ["shownLines", "shown_lines", "displayedLines", "displayed_lines", "returnedLines", "returned_lines", "visibleLines", "visible_lines"]);
+  const omittedLines = numericMeta(records, ["omittedLines", "omitted_lines", "truncatedLines", "truncated_lines", "remainingLines", "remaining_lines"]);
+  const totalBytes = numericMeta(records, ["totalBytes", "total_bytes", "byteLength", "byte_length", "size", "totalSize", "total_size"]);
+  const shownBytes = numericMeta(records, ["shownBytes", "shown_bytes", "displayedBytes", "displayed_bytes", "returnedBytes", "returned_bytes"]);
+  const explicitTruncated = booleanMeta(records, ["truncated", "isTruncated", "is_truncated", "wasTruncated", "was_truncated"]);
+  const omittedMatch = text.match(/(?:omitted|省略)\s*([0-9,]+)\s*(?:more\s*)?(?:lines?|行)/i);
+  const totalMatch = text.match(/(?:total|共)\s*([0-9,]+)\s*(?:lines?|行)/i);
+  if (totalLines) meta.totalLines = totalLines;
+  if (shownLines) meta.shownLines = shownLines;
+  if (omittedLines) meta.omittedLines = omittedLines;
+  if (totalBytes) meta.totalBytes = totalBytes;
+  if (shownBytes) meta.shownBytes = shownBytes;
+  if (!meta.omittedLines && omittedMatch) meta.omittedLines = Number(omittedMatch[1].replace(/,/g, ""));
+  if (!meta.totalLines && totalMatch) meta.totalLines = Number(totalMatch[1].replace(/,/g, ""));
+  if (explicitTruncated !== undefined) meta.truncated = explicitTruncated;
+  else if (/\b(truncated|omitted)\b|截断|省略/.test(text)) meta.truncated = true;
+  if (meta.omittedLines && !meta.truncated) meta.truncated = true;
+  return Object.keys(meta).length ? meta : undefined;
+}
+
+function enrichToolMeta(meta: ToolResultMeta | undefined, text: string): ToolResultMeta | undefined {
+  const lines = text ? lineCount(text) : 0;
+  if (!meta && !lines) return undefined;
+  const next: ToolResultMeta = { ...(meta ?? {}) };
+  if (lines && !next.shownLines) next.shownLines = lines;
+  if (lines && !next.totalLines && !next.truncated) next.totalLines = lines;
+  if (next.omittedLines && next.shownLines && !next.totalLines) next.totalLines = next.shownLines + next.omittedLines;
+  return next;
+}
+
+function collectRecords(value: unknown, out: Record<string, any>[] = [], depth = 0): Record<string, any>[] {
+  if (!value || depth > 3) return out;
+  if (Array.isArray(value)) {
+    value.slice(0, 20).forEach((item) => collectRecords(item, out, depth + 1));
+    return out;
+  }
+  if (typeof value === "object") {
+    const record = value as Record<string, any>;
+    out.push(record);
+    for (const key of ["metadata", "meta", "stats", "summary", "content"]) collectRecords(record[key], out, depth + 1);
+  }
+  return out;
+}
+
+function numericMeta(records: Record<string, any>[], keys: string[]): number | undefined {
+  for (const record of records) for (const key of keys) {
+    const value = record[key];
+    const numberValue = typeof value === "number" ? value : typeof value === "string" ? Number(value.replace(/,/g, "")) : NaN;
+    if (Number.isFinite(numberValue) && numberValue > 0) return numberValue;
+  }
+  return undefined;
+}
+
+function booleanMeta(records: Record<string, any>[], keys: string[]): boolean | undefined {
+  for (const record of records) for (const key of keys) {
+    const value = record[key];
+    if (typeof value === "boolean") return value;
+    if (typeof value === "string" && /^(true|false)$/i.test(value)) return value.toLowerCase() === "true";
+  }
+  return undefined;
+}
+
+function buildWriteDiff(content: string, filePath?: string): DiffLine[] {
+  const lines = splitTextLines(content);
+  return [
+    { type: "meta", text: `+++ ${filePath || "file"}` },
+    { type: "meta", text: `@@ -0,0 +1,${lines.length} @@` },
+    ...lines.map((line) => ({ type: "add" as const, text: line }))
+  ];
+}
+
+function buildUnifiedDiff(oldText: string, newText: string, filePath?: string): DiffLine[] {
+  const oldLines = splitTextLines(oldText);
+  const newLines = splitTextLines(newText);
+  const header: DiffLine[] = [
+    { type: "meta", text: `--- ${filePath || "file"}` },
+    { type: "meta", text: `+++ ${filePath || "file"}` },
+    { type: "meta", text: `@@ -1,${oldLines.length} +1,${newLines.length} @@` }
+  ];
+  if (oldLines.length * newLines.length > 90_000) {
+    return [...header, ...oldLines.map((line) => ({ type: "del" as const, text: line })), ...newLines.map((line) => ({ type: "add" as const, text: line }))];
+  }
+  const dp = Array.from({ length: oldLines.length + 1 }, () => new Uint16Array(newLines.length + 1));
+  for (let i = oldLines.length - 1; i >= 0; i--) {
+    for (let j = newLines.length - 1; j >= 0; j--) {
+      dp[i][j] = oldLines[i] === newLines[j] ? dp[i + 1][j + 1] + 1 : Math.max(dp[i + 1][j], dp[i][j + 1]);
+    }
+  }
+  const body: DiffLine[] = [];
+  let i = 0;
+  let j = 0;
+  while (i < oldLines.length || j < newLines.length) {
+    if (i < oldLines.length && j < newLines.length && oldLines[i] === newLines[j]) {
+      body.push({ type: "ctx", text: oldLines[i] });
+      i++; j++;
+    } else if (j >= newLines.length || (i < oldLines.length && dp[i + 1][j] >= dp[i][j + 1])) {
+      body.push({ type: "del", text: oldLines[i] });
+      i++;
+    } else {
+      body.push({ type: "add", text: newLines[j] });
+      j++;
+    }
+  }
+  return [...header, ...body];
+}
+
+function splitTextLines(text: string): string[] {
+  if (!text) return [];
+  return text.replace(/\r\n/g, "\n").split("\n");
+}
+
+function extractText(node: any): string {
+  if (node === undefined || node === null) return "";
+  if (typeof node === "string" || typeof node === "number") return String(node);
+  if (Array.isArray(node)) return node.map(extractText).join("");
+  if (node.props?.children !== undefined) return extractText(node.props.children);
+  return "";
+}
+
+function languageFromCodeNode(children: any): string {
+  const node = Array.isArray(children) ? children[0] : children;
+  const className = String(node?.props?.className ?? "");
+  return className.match(/language-([^\s]+)/)?.[1] ?? "";
 }
 
 function safeJson(value: unknown): string {
@@ -762,4 +999,10 @@ function formatTokens(value: number) {
   if (value >= 1_000_000) return `${(value / 1_000_000).toFixed(1)}M`;
   if (value >= 1_000) return `${Math.round(value / 1_000)}k`;
   return String(value);
+}
+
+function formatBytes(value: number) {
+  if (value >= 1024 * 1024) return `${(value / 1024 / 1024).toFixed(1)}MB`;
+  if (value >= 1024) return `${(value / 1024).toFixed(1)}KB`;
+  return `${value}B`;
 }

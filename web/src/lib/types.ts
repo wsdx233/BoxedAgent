@@ -100,6 +100,16 @@ export interface FileEntry {
 export type ChatMessageRole = "user" | "assistant" | "tool" | "system";
 export type ChatToolStatus = "pending" | "running" | "done" | "error";
 
+export interface ToolResultMeta {
+  truncated?: boolean;
+  totalLines?: number;
+  shownLines?: number;
+  omittedLines?: number;
+  totalBytes?: number;
+  shownBytes?: number;
+  label?: string;
+}
+
 export interface ChatMessage {
   id: string;
   role: ChatMessageRole;
@@ -110,5 +120,6 @@ export interface ChatMessage {
   toolName?: string;
   toolArgs?: unknown;
   toolResult?: string;
+  toolResultMeta?: ToolResultMeta;
   toolStatus?: ChatToolStatus;
 }

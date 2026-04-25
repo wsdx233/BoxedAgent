@@ -2,6 +2,7 @@ import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import { store } from "../core/store.js";
 import { agentManager } from "../agent/agent-manager.js";
+import { dockerService } from "../docker/docker-service.js";
 
 const CreateSession = z.object({
   boxId: z.string().min(1),
@@ -34,6 +35,8 @@ export async function registerSessionRoutes(app: FastifyInstance) {
 
   app.post("/api/sessions", async (req, reply) => {
     const body = CreateSession.parse(req.body);
+    const box = store.getBox(body.boxId);
+    await dockerService.assertDirectory(box, cwdToWorkspaceRel(body.cwd));
     const session = await agentManager.createSession(body);
     if (body.autostart) await agentManager.start(session.id);
     reply.code(201);
@@ -106,4 +109,10 @@ function normalizeSessionCwd(value?: string): string {
   if (!rel || rel === ".") return "/workspace";
   if (rel.includes("..")) return "/workspace";
   return `/workspace/${rel}`.replace(/\/+$/, "");
+}
+
+function cwdToWorkspaceRel(cwd?: string): string {
+  const normalized = normalizeSessionCwd(cwd);
+  if (normalized === "/workspace") return ".";
+  return normalized.slice("/workspace/".length) || ".";
 }
