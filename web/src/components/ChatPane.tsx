@@ -1,4 +1,4 @@
-import { FormEvent, type ReactNode, useEffect, useMemo, useRef, useState } from "react";
+import { FormEvent, type DragEvent, type ReactNode, useEffect, useMemo, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import rehypeHighlight from "rehype-highlight";
@@ -56,11 +56,14 @@ export function ChatPane({ boxId, sessionId }: { boxId?: string; sessionId?: str
   const [queue, setQueue] = useState<QueueState>({ steering: [], followUp: [] });
   const [turnActive, setTurnActive] = useState(false);
   const [isNearBottom, setIsNearBottom] = useState(true);
+  const [dragActive, setDragActive] = useState(false);
+  const [uploadingFiles, setUploadingFiles] = useState(false);
   const messagesRef = useRef<HTMLDivElement>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const composerRef = useRef<HTMLFormElement>(null);
   const expectingTurnRef = useRef(false);
+  const dragDepthRef = useRef(0);
   const session = sessions.find((s) => s.id === sessionId);
   const messages = sessionId ? messagesBySession[sessionId] ?? [] : [];
   const canSend = text.trim().length > 0 || images.length > 0;
@@ -379,10 +382,62 @@ export function ChatPane({ boxId, sessionId }: { boxId?: string; sessionId?: str
     }
   }
 
+  async function handleAttachmentFiles(input: Iterable<File> | FileList | null | undefined) {
+    const files = [...(input ?? [])].filter((file) => file.size >= 0);
+    if (!files.length) return;
+    const imageFiles = files.filter((file) => file.type.startsWith("image/"));
+    const otherFiles = files.filter((file) => !file.type.startsWith("image/"));
+    setUploadingFiles(true);
+    try {
+      if (imageFiles.length) {
+        const converted = await filesToImages(imageFiles);
+        setImages((prev) => [...prev, ...converted]);
+      }
+      if (boxId && otherFiles.length) {
+        for (const file of otherFiles) await api.uploadFile(boxId, ".", file);
+        setText((t) => `${t}${t ? "\n" : ""}我已上传文件到 /workspace：${otherFiles.map((file) => file.name).join(", ")}，请根据需要读取。`);
+      }
+    } catch (err) {
+      if (sessionId) appendMessage(sessionId, { id: newId(), role: "system", text: `上传附件失败：${err instanceof Error ? err.message : String(err)}`, timestamp: Date.now() });
+    } finally {
+      setUploadingFiles(false);
+    }
+  }
+
+  function handleDragEnter(event: DragEvent<HTMLDivElement>) {
+    if (!hasDraggedFiles(event)) return;
+    event.preventDefault();
+    dragDepthRef.current += 1;
+    setDragActive(true);
+  }
+
+  function handleDragOver(event: DragEvent<HTMLDivElement>) {
+    if (!hasDraggedFiles(event)) return;
+    event.preventDefault();
+    event.dataTransfer.dropEffect = "copy";
+    setDragActive(true);
+  }
+
+  function handleDragLeave(event: DragEvent<HTMLDivElement>) {
+    if (!hasDraggedFiles(event)) return;
+    event.preventDefault();
+    dragDepthRef.current = Math.max(0, dragDepthRef.current - 1);
+    if (dragDepthRef.current === 0) setDragActive(false);
+  }
+
+  function handleDrop(event: DragEvent<HTMLDivElement>) {
+    if (!hasDraggedFiles(event)) return;
+    event.preventDefault();
+    dragDepthRef.current = 0;
+    setDragActive(false);
+    void handleAttachmentFiles(event.dataTransfer.files);
+  }
+
   if (!boxId) return <EmptyChat title="选择或创建 Box" subtitle="每个 Box 都是独立 Docker 沙箱，包含自己的 pi 配置、文件系统和 code-server。" />;
   if (!sessionId) return <EmptyChat title="选择或创建 Session" subtitle="Session 负责和 Box 内的 pi RPC agent 对话；可以为同一个 Box 并行开多个会话。" />;
 
-  return <div className="chat surface-tonal">
+  return <div className={`chat surface-tonal ${dragActive ? "drag-active" : ""}`} onDragEnter={handleDragEnter} onDragOver={handleDragOver} onDragLeave={handleDragLeave} onDrop={handleDrop}>
+    {dragActive && <div className="drop-overlay"><Paperclip size={28} /><strong>拖放文件到这里</strong><span>图片会作为消息附件；其它文件会上传到 /workspace</span></div>}
     <div className="chat-topbar">
       <div className="chat-title-block">
         <div className="chat-title"><Sparkles size={18} /> {session?.name ?? "Session"}</div>
@@ -416,8 +471,9 @@ export function ChatPane({ boxId, sessionId }: { boxId?: string; sessionId?: str
         {queue.steering.map((item, i) => <span key={`s-${i}`} className="queue-chip">Steer · {item}</span>)}
         {queue.followUp.map((item, i) => <span key={`f-${i}`} className="queue-chip">Follow-up · {item}</span>)}
       </div>}
-      {images.length > 0 && <div className="attachment-strip">
+      {(images.length > 0 || uploadingFiles) && <div className="attachment-strip">
         {images.map((img) => <div className="image-chip" key={img.name}><img src={`data:${img.mimeType};base64,${img.data}`} alt="" /><span>{img.name}</span></div>)}
+        {uploadingFiles && <span className="queue-chip"><Loader2 size={13} className="spin" /> 正在处理附件…</span>}
       </div>}
       <textarea
         value={text}
@@ -466,18 +522,9 @@ export function ChatPane({ boxId, sessionId }: { boxId?: string; sessionId?: str
             </MenuPanel>}
           </div>
           <input ref={fileInputRef} hidden type="file" multiple onChange={async (e) => {
-            const files = [...(e.target.files ?? [])];
+            const files = e.currentTarget.files;
             e.currentTarget.value = "";
-            const imageFiles = files.filter((f) => f.type.startsWith("image/"));
-            const otherFiles = files.filter((f) => !f.type.startsWith("image/"));
-            if (imageFiles.length) {
-              const converted = await filesToImages(imageFiles);
-              setImages((prev) => [...prev, ...converted]);
-            }
-            if (boxId && otherFiles.length) {
-              for (const file of otherFiles) await api.uploadFile(boxId, ".", file);
-              setText((t) => `${t}${t ? "\n" : ""}我已上传文件到 /workspace：${otherFiles.map((f) => f.name).join(", ")}，请根据需要读取。`);
-            }
+            await handleAttachmentFiles(files);
           }} />
         </div>
 
@@ -691,6 +738,10 @@ function CopyButton({ text }: { text: string }) {
     }
   }
   return <button type="button" className="copy-button" onClick={copy}><Copy size={13} /> {copied ? "已复制" : "复制"}</button>;
+}
+
+function hasDraggedFiles(event: DragEvent<HTMLElement>) {
+  return Array.from(event.dataTransfer?.types ?? []).includes("Files");
 }
 
 async function filesToImages(files: Iterable<File> | null) {

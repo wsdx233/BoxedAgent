@@ -188,9 +188,13 @@ hr { border: 0; border-top: 1px solid var(--border); margin: 14px 0; }
 .auth-card h1 { margin: 0; font-size: 26px; letter-spacing: -.03em; }
 .auth-card p { margin: 0; color: var(--muted); line-height: 1.55; }
 .auth-icon { width: 54px; height: 54px; display: grid; place-items: center; border-radius: 20px; color: var(--md-sys-color-on-primary); background: linear-gradient(135deg, var(--md-sys-color-primary), var(--md-sys-color-tertiary)); box-shadow: 0 14px 36px rgba(208,188,255,.20); }
+.drop-overlay { position: absolute; inset: 12px; z-index: 80; pointer-events: none; display: grid; place-content: center; justify-items: center; gap: 8px; text-align: center; border: 2px dashed color-mix(in srgb, var(--accent) 68%, transparent); border-radius: var(--radius-lg); background: color-mix(in srgb, var(--md-sys-color-primary-container) 22%, rgba(15,13,19,.86)); color: var(--md-sys-color-on-primary-container); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 18%, transparent), var(--shadow-3); backdrop-filter: blur(12px); }
+.drop-overlay strong { font-size: 16px; }
+.drop-overlay span { color: var(--muted); font-size: 12px; }
+.drag-active { outline: 2px solid color-mix(in srgb, var(--accent) 48%, transparent); outline-offset: -2px; }
 
 /* Chat */
-.chat { display: flex; flex-direction: column; background: color-mix(in srgb, var(--md-sys-color-surface) 62%, var(--md-sys-color-surface-container-low)); }
+.chat { position: relative; display: flex; flex-direction: column; background: color-mix(in srgb, var(--md-sys-color-surface) 62%, var(--md-sys-color-surface-container-low)); }
 .chat-title-block { min-width: 0; }
 .chat-title { display: flex; align-items: center; gap: 8px; font-weight: 800; font-size: 16px; }
 .chat-subtitle { color: var(--muted); font-size: 12px; margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -347,6 +351,8 @@ hr { border: 0; border-top: 1px solid var(--border); margin: 14px 0; }
 .terminal-overlay p { max-width: 420px; line-height: 1.55; }
 
 /* Files */
+.file-browser-panel { position: relative; }
+.file-drop-overlay { inset: 14px; border-radius: var(--radius-md); }
 .file-row { display: grid; grid-template-columns: 1fr 86px 78px; gap: 8px; align-items: center; padding: 8px; border-bottom: 1px solid color-mix(in srgb, var(--border) 70%, transparent); border-radius: var(--radius-sm); }
 .file-row:hover { background: color-mix(in srgb, var(--md-sys-color-primary) 9%, transparent); }
 .file-row button { justify-content: flex-start; }

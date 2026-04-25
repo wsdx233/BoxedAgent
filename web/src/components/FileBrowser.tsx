@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { type DragEvent, useEffect, useMemo, useRef, useState } from "react";
 import { Download, Folder, File, Trash2, Upload, RefreshCw, FolderPlus, Loader2, Plus } from "lucide-react";
 import { api } from "../lib/api";
 import type { FileEntry } from "../lib/types";
@@ -11,6 +11,10 @@ export function FileBrowser({ boxId }: { boxId?: string }) {
   const [showNewDir, setShowNewDir] = useState(false);
   const [newDirName, setNewDirName] = useState("");
   const [creatingDir, setCreatingDir] = useState(false);
+  const [dragActive, setDragActive] = useState(false);
+  const [uploading, setUploading] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const dragDepthRef = useRef(0);
   const parent = useMemo(() => path === "." || path === "" ? "." : path.split("/").slice(0, -1).join("/") || ".", [path]);
 
   async function load() {
@@ -46,14 +50,61 @@ export function FileBrowser({ boxId }: { boxId?: string }) {
     }
   }
 
+  async function uploadFiles(input: Iterable<File> | FileList | null | undefined) {
+    if (!boxId) return;
+    const files = [...(input ?? [])].filter((file) => file.size >= 0);
+    if (!files.length) return;
+    setUploading(true);
+    setError(undefined);
+    try {
+      for (const file of files) await api.uploadFile(boxId, path, file);
+      await load();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setUploading(false);
+    }
+  }
+
+  function handleDragEnter(event: DragEvent<HTMLDivElement>) {
+    if (!hasDraggedFiles(event)) return;
+    event.preventDefault();
+    dragDepthRef.current += 1;
+    setDragActive(true);
+  }
+
+  function handleDragOver(event: DragEvent<HTMLDivElement>) {
+    if (!hasDraggedFiles(event)) return;
+    event.preventDefault();
+    event.dataTransfer.dropEffect = "copy";
+    setDragActive(true);
+  }
+
+  function handleDragLeave(event: DragEvent<HTMLDivElement>) {
+    if (!hasDraggedFiles(event)) return;
+    event.preventDefault();
+    dragDepthRef.current = Math.max(0, dragDepthRef.current - 1);
+    if (dragDepthRef.current === 0) setDragActive(false);
+  }
+
+  function handleDrop(event: DragEvent<HTMLDivElement>) {
+    if (!hasDraggedFiles(event)) return;
+    event.preventDefault();
+    dragDepthRef.current = 0;
+    setDragActive(false);
+    void uploadFiles(event.dataTransfer.files);
+  }
+
   if (!boxId) return <div className="panel small">请选择 Box</div>;
 
-  return <div className="panel">
+  return <div className={`panel file-browser-panel ${dragActive ? "drag-active" : ""}`} onDragEnter={handleDragEnter} onDragOver={handleDragOver} onDragLeave={handleDragLeave} onDrop={handleDrop}>
+    {dragActive && <div className="drop-overlay file-drop-overlay"><Upload size={28} /><strong>拖放文件到这里上传</strong><span>目标目录：{path === "." ? "/workspace" : `/workspace/${path}`}</span></div>}
     <div className="toolbar">
-      <button onClick={() => setPath(parent)}>上级</button>
-      <button onClick={load}><RefreshCw size={15} /></button>
-      <label style={{ display: "inline-flex" }}><button><Upload size={15} /> 上传</button><input type="file" hidden onChange={async (e) => { const f = e.target.files?.[0]; if (f) { await api.uploadFile(boxId, path, f); await load(); } }} /></label>
-      <button onClick={() => { setShowNewDir(true); setNewDirName(""); }}><FolderPlus size={15} /> 新建目录</button>
+      <button type="button" onClick={() => setPath(parent)}>上级</button>
+      <button type="button" onClick={load}><RefreshCw size={15} /></button>
+      <button type="button" onClick={() => fileInputRef.current?.click()} disabled={uploading}><Upload size={15} /> {uploading ? "上传中…" : "上传"}</button>
+      <input ref={fileInputRef} type="file" hidden multiple onChange={async (e) => { const files = e.currentTarget.files; e.currentTarget.value = ""; await uploadFiles(files); }} />
+      <button type="button" onClick={() => { setShowNewDir(true); setNewDirName(""); }}><FolderPlus size={15} /> 新建目录</button>
     </div>
     {showNewDir && <div className="dir-create-row file-create-row">
       <FolderPlus size={15} />
@@ -63,7 +114,7 @@ export function FileBrowser({ boxId }: { boxId?: string }) {
     </div>}
     <input value={path} onChange={(e) => setPath(e.target.value || ".")} onKeyDown={(e) => { if (e.key === "Enter") void load(); }} />
     {error && <p className="small" style={{ color: "var(--red)" }}>{error}</p>}
-    {loading && <p className="small">加载中...</p>}
+    {(loading || uploading) && <p className="small">{uploading ? "上传中..." : "加载中..."}</p>}
     {entries.map((entry) => <div className="file-row" key={entry.path}>
       <button style={{ textAlign: "left", background: "transparent", border: 0 }} onClick={() => entry.type === "directory" && setPath(entry.path)}>
         {entry.type === "directory" ? <Folder size={15} /> : <File size={15} />} {entry.name}
@@ -75,6 +126,10 @@ export function FileBrowser({ boxId }: { boxId?: string }) {
       </span>
     </div>)}
   </div>;
+}
+
+function hasDraggedFiles(event: DragEvent<HTMLElement>) {
+  return Array.from(event.dataTransfer?.types ?? []).includes("Files");
 }
 
 function formatSize(n: number) {
