@@ -119,7 +119,6 @@ export function App() {
       <button type="button" className={mobilePanel === "chat" ? "active" : ""} onClick={() => setMobilePanel("chat")}><MessageSquare size={18} /><span>Chat</span></button>
       <button type="button" className={mobilePanel === "tools" ? "active" : ""} onClick={() => setMobilePanel("tools")}><Wrench size={18} /><span>Tools</span></button>
     </nav>
-    <div className="app-status small">Docker: {health} {activeBox ? ` · ${activeBox.name}` : ""}{activity ? ` · ${activity}` : ""}</div>
     {auth.enabled && <button type="button" className="auth-logout" onClick={logout}><LogOut size={14} /> 退出</button>}
     {showCreate && <CreateBoxModal onClose={() => setShowCreate(false)} onCreated={refresh} />}
   </>;

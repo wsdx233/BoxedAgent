@@ -272,6 +272,61 @@ print(json.dumps(items))`;
     if (!(await this.directoryExists(box, relPath))) throw badRequest(`directory does not exist: /workspace/${relPath === "." ? "" : relPath}`.replace(/\/$/, ""));
   }
 
+  async copyPath(box: BoxRecord, sourceRelPath: string, targetRelPath: string): Promise<void> {
+    const script = `
+import os, sys, shutil
+root = '/workspace'
+def resolve(rel):
+    p = os.path.abspath(os.path.join(root, rel))
+    if not (p == root or p.startswith(root + os.sep)):
+        raise SystemExit('path escapes workspace')
+    return p
+src = resolve(sys.argv[1])
+dst = resolve(sys.argv[2])
+if src == root:
+    raise SystemExit('cannot copy workspace root')
+if not os.path.lexists(src):
+    raise SystemExit('source does not exist')
+if os.path.lexists(dst):
+    raise SystemExit('target already exists')
+if os.path.isdir(src) and not os.path.islink(src) and (dst == src or dst.startswith(src + os.sep)):
+    raise SystemExit('cannot copy directory into itself')
+os.makedirs(os.path.dirname(dst), exist_ok=True)
+if os.path.isdir(src) and not os.path.islink(src):
+    shutil.copytree(src, dst, symlinks=True)
+else:
+    shutil.copy2(src, dst, follow_symlinks=False)
+`;
+    const result = await this.exec(box, ["python3", "-c", script, sourceRelPath, targetRelPath]);
+    if (result.exitCode !== 0) throw badRequest(result.stderr || result.stdout || "copy failed");
+  }
+
+  async movePath(box: BoxRecord, sourceRelPath: string, targetRelPath: string): Promise<void> {
+    const script = `
+import os, sys, shutil
+root = '/workspace'
+def resolve(rel):
+    p = os.path.abspath(os.path.join(root, rel))
+    if not (p == root or p.startswith(root + os.sep)):
+        raise SystemExit('path escapes workspace')
+    return p
+src = resolve(sys.argv[1])
+dst = resolve(sys.argv[2])
+if src == root:
+    raise SystemExit('cannot move workspace root')
+if not os.path.lexists(src):
+    raise SystemExit('source does not exist')
+if os.path.lexists(dst):
+    raise SystemExit('target already exists')
+if os.path.isdir(src) and not os.path.islink(src) and (dst == src or dst.startswith(src + os.sep)):
+    raise SystemExit('cannot move directory into itself')
+os.makedirs(os.path.dirname(dst), exist_ok=True)
+shutil.move(src, dst)
+`;
+    const result = await this.exec(box, ["python3", "-c", script, sourceRelPath, targetRelPath]);
+    if (result.exitCode !== 0) throw badRequest(result.stderr || result.stdout || "move failed");
+  }
+
   async deletePath(box: BoxRecord, relPath: string): Promise<void> {
     const result = await this.exec(box, ["python3", "-c", "import os,sys,shutil; root='/workspace'; p=os.path.abspath(os.path.join(root, sys.argv[1])); assert p!=root and p.startswith(root+os.sep); shutil.rmtree(p) if os.path.isdir(p) and not os.path.islink(p) else os.remove(p)", relPath]);
     if (result.exitCode !== 0) throw badRequest(result.stderr || result.stdout || "delete failed");

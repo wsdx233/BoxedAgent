@@ -53,6 +53,8 @@ export const api = {
 
   listFiles: (boxId: string, p: string) => request<{ entries: FileEntry[] }>(`/api/boxes/${boxId}/files?path=${encodeURIComponent(p)}`),
   mkdir: (boxId: string, p: string) => request<{ ok: boolean }>(`/api/boxes/${boxId}/files/mkdir`, { method: "POST", body: JSON.stringify({ path: p }) }),
+  copyFile: (boxId: string, source: string, target: string) => request<{ ok: boolean }>(`/api/boxes/${boxId}/files/copy`, { method: "POST", body: JSON.stringify({ source, target }) }),
+  moveFile: (boxId: string, source: string, target: string) => request<{ ok: boolean }>(`/api/boxes/${boxId}/files/move`, { method: "POST", body: JSON.stringify({ source, target }) }),
   deleteFile: (boxId: string, p: string) => request<{ ok: boolean }>(`/api/boxes/${boxId}/files?path=${encodeURIComponent(p)}`, { method: "DELETE" }),
   uploadFile: async (boxId: string, p: string, file: File) => {
     const form = new FormData();

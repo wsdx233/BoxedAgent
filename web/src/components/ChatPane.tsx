@@ -2,8 +2,9 @@ import { FormEvent, memo, type Dispatch, type DragEvent, type PointerEvent as Re
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import rehypeHighlight from "rehype-highlight";
-import { Archive, Bot, Brain, CheckCircle2, ChevronDown, CircleAlert, Copy, Loader2, Paperclip, RefreshCw, Send, Sparkles, Square, Wrench } from "lucide-react";
+import { Archive, Bot, Brain, CheckCircle2, ChevronDown, CircleAlert, Copy, ExternalLink, ImageIcon, Loader2, Paperclip, RefreshCw, Send, Sparkles, Square, Wrench, X } from "lucide-react";
 import { api, closeWebSocketQuietly, wsUrl } from "../lib/api";
+import { COMPOSER_INSERT_EVENT, type ComposerInsertDetail } from "../lib/composer-events";
 import { newId } from "../lib/id";
 import type { AgentSessionRecord, ChatAttachment, ChatMessage, PiModel, SessionStats, ThinkingLevel, ToolResultMeta } from "../lib/types";
 import { useAppStore } from "../state/app";
@@ -33,6 +34,7 @@ const THINKING_LEVELS: Array<{ value: ThinkingLevel; label: string; description:
 
 const ATTACHMENT_UPLOAD_DIR = ".upload";
 const ATTACHMENT_UPLOAD_ABS_DIR = "/workspace/.upload";
+const PROGRESS_NODE_HIDE_DISTANCE = 0.045;
 
 export function ChatPane({ boxId, sessionId }: { boxId?: string; sessionId?: string }) {
   const {
@@ -87,7 +89,7 @@ export function ChatPane({ boxId, sessionId }: { boxId?: string; sessionId?: str
       : models;
     return filtered.slice(0, 180);
   }, [models, modelSearch]);
-  const renderedMessages = useMemo(() => messages.map((m, idx) => <div key={m.id} id={messageDomId(m.id)} className="message-anchor-wrap"><MemoMessageBubble message={m} isLatest={idx === messages.length - 1} /></div>), [messages]);
+  const renderedMessages = useMemo(() => messages.map((m, idx) => <div key={m.id} id={messageDomId(m.id)} className="message-anchor-wrap"><MemoMessageBubble message={m} isLatest={idx === messages.length - 1} boxId={boxId} /></div>), [messages, boxId]);
   const userProgressNodes = useMemo(() => messages.filter((m) => m.role === "user").map((m, idx) => ({ id: m.id, label: `#${idx + 1}`, text: m.text || attachmentSummary(m.attachments ?? []) })), [messages]);
 
   useEffect(() => {
@@ -149,6 +151,17 @@ export function ChatPane({ boxId, sessionId }: { boxId?: string; sessionId?: str
     setAutoCompact(session?.autoCompactionEnabled ?? true);
     setCurrentModel({ provider: session?.provider, model: session?.model });
   }, [session?.provider, session?.model, session?.thinkingLevel, session?.autoCompactionEnabled]);
+
+  useEffect(() => {
+    if (!sessionId) return;
+    const onInsert = (event: Event) => {
+      const detail = (event as CustomEvent<ComposerInsertDetail>).detail;
+      if (detail?.sessionId !== sessionId || !detail.text) return;
+      setText((current) => current ? `${current}${/\s$/.test(current) || /^\s/.test(detail.text) ? "" : " "}${detail.text}` : detail.text);
+    };
+    window.addEventListener(COMPOSER_INSERT_EVENT, onInsert);
+    return () => window.removeEventListener(COMPOSER_INSERT_EVENT, onInsert);
+  }, [sessionId]);
 
   useEffect(() => {
     if (!openMenu) return;
@@ -525,7 +538,7 @@ export function ChatPane({ boxId, sessionId }: { boxId?: string; sessionId?: str
         setFileAttachments((prev) => [...prev, ...otherFiles.map((file) => ({ kind: "file" as const, name: file.name, path: uploaded.get(file)?.path ?? uploadedPathForName(file.name), size: file.size, mimeType: file.type || undefined }))]);
       }
       const refs = files.map((file) => fileRef(uploaded.get(file)?.path ?? uploadedPathForName(file.name))).join(" ");
-      setText((t) => `${t}${t ? "\n" : ""}请读取附件： ${refs}`);
+      setText((t) => `${t}${t && !/\s$/.test(t) ? " " : ""}${refs}`);
     } catch (err) {
       if (sessionId) appendMessage(sessionId, { id: newId(), role: "system", text: `上传附件失败：${err instanceof Error ? err.message : String(err)}`, timestamp: Date.now() });
     } finally {
@@ -603,7 +616,7 @@ export function ChatPane({ boxId, sessionId }: { boxId?: string; sessionId?: str
         {queue.steering.map((item, i) => <span key={`s-${i}`} className="queue-chip">Steer · {item}</span>)}
         {queue.followUp.map((item, i) => <span key={`f-${i}`} className="queue-chip">Follow-up · {item}</span>)}
       </div>}
-      <ComposerAttachmentStrip images={images} fileAttachments={fileAttachments} uploadingFiles={uploadingFiles} setImages={setImages} setFileAttachments={setFileAttachments} />
+      <ComposerAttachmentStrip boxId={boxId} images={images} fileAttachments={fileAttachments} uploadingFiles={uploadingFiles} setImages={setImages} setFileAttachments={setFileAttachments} />
       <textarea
         value={text}
         onChange={(e) => setText(e.target.value)}
@@ -703,14 +716,14 @@ function EmptyChat({ title, subtitle }: { title: string; subtitle: string }) {
   </div>;
 }
 
-function MessageBubble({ message, isLatest }: { message: ChatMessage; isLatest: boolean }) {
+function MessageBubble({ message, isLatest, boxId }: { message: ChatMessage; isLatest: boolean; boxId?: string }) {
   if (message.role === "tool") return <ToolCard message={message} isLatest={isLatest} />;
   if (message.role === "system") return <div className="system-line"><CircleAlert size={14} /> <MarkdownText text={message.text} /></div>;
   return <article className={`message-row ${message.role}`}>
     <div className={`message ${message.role}`}>
       {message.thinking && <ThinkingBlock text={message.thinking} autoOpen={isLatest} />}
       {message.text ? message.role === "user" ? <UserMessageText text={message.text} /> : <MarkdownText text={message.text} /> : message.thinking ? null : <span className="muted">…</span>}
-      {message.attachments?.length ? <AttachmentGallery attachments={message.attachments} /> : null}
+      {message.attachments?.length ? <AttachmentGallery attachments={message.attachments} boxId={boxId} /> : null}
     </div>
   </article>;
 }
@@ -785,18 +798,22 @@ function ChatProgressRail({ progress, nodes, showBottomButton, onProgressChange,
   return <div className="chat-progress-rail" aria-label="聊天进度">
     <div ref={trackRef} className="chat-progress-track" title={`阅读进度 ${Math.round(progress * 100)}%`} onPointerDown={beginDrag} onTouchStart={beginTouchDrag}>
       <span className="chat-progress-fill" style={{ height: `${Math.round(progress * 100)}%` }} />
-      {nodes.map((node) => <button
-        type="button"
-        key={node.id}
-        className="chat-progress-node"
-        style={{ top: `${Math.round(clamp01(node.position) * 100)}%` }}
-        title={node.text}
-        onPointerDown={(event) => event.stopPropagation()}
-        onClick={() => onJumpToMessage(node.id)}
-      >
-        <span className="progress-label">{node.label}</span>
-        <span className="progress-text">{previewText(node.text, 60)}</span>
-      </button>)}
+      {nodes.map((node) => {
+        const position = clamp01(node.position);
+        const nearThumb = Math.abs(position - progress) < PROGRESS_NODE_HIDE_DISTANCE;
+        return <button
+          type="button"
+          key={node.id}
+          className={`chat-progress-node ${nearThumb ? "near-thumb" : ""}`}
+          style={{ top: `${Math.round(position * 100)}%` }}
+          title={node.text}
+          onPointerDown={(event) => event.stopPropagation()}
+          onClick={() => onJumpToMessage(node.id)}
+        >
+          <span className="progress-label">{node.label}</span>
+          <span className="progress-text">{previewText(node.text, 60)}</span>
+        </button>;
+      })}
       <span
         className="chat-progress-thumb"
         role="slider"
@@ -829,37 +846,67 @@ function UserMessageText({ text }: { text: string }) {
   })}</div>;
 }
 
-const ComposerAttachmentStrip = memo(function ComposerAttachmentStrip({ images, fileAttachments, uploadingFiles, setImages, setFileAttachments }: {
+const ComposerAttachmentStrip = memo(function ComposerAttachmentStrip({ boxId, images, fileAttachments, uploadingFiles, setImages, setFileAttachments }: {
+  boxId?: string;
   images: Array<{ type: "image"; data: string; mimeType: string; name: string; path?: string; size?: number }>;
   fileAttachments: Array<{ kind: "file"; name: string; path: string; size?: number; mimeType?: string }>;
   uploadingFiles: boolean;
   setImages: Dispatch<SetStateAction<Array<{ type: "image"; data: string; mimeType: string; name: string; path?: string; size?: number }>>>;
   setFileAttachments: Dispatch<SetStateAction<Array<{ kind: "file"; name: string; path: string; size?: number; mimeType?: string }>>>;
 }) {
+  const [preview, setPreview] = useState<ChatAttachment>();
   if (images.length === 0 && fileAttachments.length === 0 && !uploadingFiles) return null;
   return <div className="attachment-strip">
-    {images.map((img, idx) => <button type="button" className="image-chip attachment-chip-button" key={`${img.name}-${idx}`} title={img.path ? `点击移除附件 · ${img.path}` : "点击移除附件"} onClick={() => setImages((prev) => prev.filter((_, i) => i !== idx))}><img src={`data:${img.mimeType};base64,${img.data}`} alt="" /><span>{img.name}</span>{img.path && <small>@</small>}</button>)}
-    {fileAttachments.map((file, idx) => <button type="button" className="file-chip attachment-chip-button" key={`${file.path}-${idx}`} title="点击移除附件" onClick={() => setFileAttachments((prev) => prev.filter((_, i) => i !== idx))}><Paperclip size={14} /><span>{file.name}</span><small>{file.size ? formatBytes(file.size) : file.path}</small></button>)}
+    {images.map((img, idx) => {
+      const attachment: ChatAttachment = { kind: "image", name: img.name, mimeType: img.mimeType, data: img.data, path: img.path, size: img.size };
+      return <span className="attachment-pill" key={`${img.name}-${idx}`}>
+        <button type="button" className="attachment-chip-button image-chip" title={img.path ? `预览图片 · ${img.path}` : "预览图片"} onClick={() => setPreview(attachment)}><ImageIcon size={15} /><span>{img.name}</span>{img.path && <small>@</small>}</button>
+        <button type="button" className="attachment-remove-button" title="移除附件" onClick={() => setImages((prev) => prev.filter((_, i) => i !== idx))}><X size={12} /></button>
+      </span>;
+    })}
+    {fileAttachments.map((file, idx) => <span className="attachment-pill" key={`${file.path}-${idx}`}>
+      <button type="button" className="file-chip attachment-chip-button" title="查看附件" onClick={() => setPreview(file)}><Paperclip size={14} /><span>{file.name}</span><small>{file.size ? formatBytes(file.size) : file.path}</small></button>
+      <button type="button" className="attachment-remove-button" title="移除附件" onClick={() => setFileAttachments((prev) => prev.filter((_, i) => i !== idx))}><X size={12} /></button>
+    </span>)}
     {uploadingFiles && <span className="queue-chip"><Loader2 size={13} className="spin" /> 正在处理附件…</span>}
+    {preview && <AttachmentPreviewDialog attachment={preview} boxId={boxId} onClose={() => setPreview(undefined)} />}
   </div>;
 });
 
-function AttachmentGallery({ attachments }: { attachments: ChatAttachment[] }) {
-  const images = attachments.filter((item): item is Extract<ChatAttachment, { kind: "image" }> => item.kind === "image");
-  const files = attachments.filter((item): item is Extract<ChatAttachment, { kind: "file" }> => item.kind === "file");
+function AttachmentGallery({ attachments, boxId }: { attachments: ChatAttachment[]; boxId?: string }) {
+  const [preview, setPreview] = useState<ChatAttachment>();
   return <div className="message-attachments">
-    {images.length > 0 && <div className="message-image-grid">
-      {images.map((img, idx) => <a key={`${img.name}-${idx}`} className="message-image-link" href={`data:${img.mimeType};base64,${img.data}`} target="_blank" rel="noreferrer" title={img.path ? `${img.name} · ${img.path}` : img.name}>
-        <img src={`data:${img.mimeType};base64,${img.data}`} alt={img.name} />
-        <span>{img.name}{img.path ? ` · ${img.path}` : ""}</span>
-      </a>)}
-    </div>}
-    {files.length > 0 && <div className="message-file-list">
-      {files.map((file, idx) => <div className="message-file-card" key={`${file.path}-${idx}`} title={file.path}>
-        <Paperclip size={15} />
-        <div><strong>{file.name}</strong><small>{file.path}{file.size ? ` · ${formatBytes(file.size)}` : ""}</small></div>
-      </div>)}
-    </div>}
+    <div className="message-attachment-list">
+      {attachments.map((attachment, idx) => attachment.kind === "image"
+        ? <button key={`${attachment.name}-${idx}`} type="button" className="message-image-link" onClick={() => setPreview(attachment)} title={attachment.path ? `${attachment.name} · ${attachment.path}` : attachment.name}>
+          <ImageIcon size={22} />
+          <span>{attachment.name}{attachment.path ? ` · ${attachment.path}` : ""}</span>
+        </button>
+        : <button type="button" className="message-file-card" key={`${attachment.path}-${idx}`} title={attachment.path} onClick={() => setPreview(attachment)}>
+          <Paperclip size={15} />
+          <div><strong>{attachment.name}</strong><small>{attachment.path}{attachment.size ? ` · ${formatBytes(attachment.size)}` : ""}</small></div>
+        </button>)}
+    </div>
+    {preview && <AttachmentPreviewDialog attachment={preview} boxId={boxId} onClose={() => setPreview(undefined)} />}
+  </div>;
+}
+
+function AttachmentPreviewDialog({ attachment, boxId, onClose }: { attachment: ChatAttachment; boxId?: string; onClose: () => void }) {
+  const imageSrc = attachment.kind === "image" ? attachmentImageSrc(attachment, boxId) : undefined;
+  const download = attachment.path && boxId ? api.downloadUrl(boxId, workspaceRelPath(attachment.path)) : undefined;
+  return <div className="modal-backdrop attachment-preview-backdrop" onMouseDown={onClose}>
+    <div className="modal attachment-preview-modal" onMouseDown={(event) => event.stopPropagation()}>
+      <div className="attachment-preview-head">
+        <div className="attachment-preview-title">{attachment.kind === "image" ? <ImageIcon size={18} /> : <Paperclip size={18} />}<div><strong>{attachment.name}</strong><small>{attachment.path ?? attachment.mimeType ?? "附件"}{attachment.size ? ` · ${formatBytes(attachment.size)}` : ""}</small></div></div>
+        <button type="button" className="icon-button compact-icon" title="关闭" onClick={onClose}><X size={15} /></button>
+      </div>
+      {attachment.kind === "image" ? <div className="attachment-image-preview">
+        {imageSrc ? <img src={imageSrc} alt={attachment.name} loading="lazy" /> : <div className="attachment-preview-empty"><ImageIcon size={32} /><span>没有可预览的图片数据</span></div>}
+      </div> : <div className="attachment-preview-empty"><Paperclip size={32} /><span>文件附件不会在聊天中内联加载。</span></div>}
+      <div className="attachment-preview-actions">
+        {download && <a className="button-tonal compact" href={download} target="_blank" rel="noreferrer"><ExternalLink size={14} /> 打开 / 下载</a>}
+      </div>
+    </div>
   </div>;
 }
 
@@ -894,7 +941,10 @@ function toolOverview(message: ChatMessage): string {
   const result = message.toolResult ?? "";
   const path = stringValue(args.path ?? args.file ?? args.filename);
   if (name === "write") return compactText(["写入", path, previewText(args.content ?? result)]);
-  if (name === "edit") return compactText(["编辑", path, previewText(args.newText ?? args.new_text ?? args.replacement ?? result)]);
+  if (name === "edit") {
+    const edits = editDiffInputs(args, path);
+    return compactText(["编辑", path, edits.length ? previewText(edits[0].newText) : previewText(result)]);
+  }
   if (name === "read") return compactText(["读取", path, args.limit ? `limit ${String(args.limit)}` : previewText(result)]);
   if (name === "bash" || name === "shell") {
     const command = bashCommand(message.toolArgs);
@@ -918,14 +968,23 @@ function ToolPreview({ message }: { message: ChatMessage }) {
   const meta = enrichToolMeta(message.toolResultMeta ?? toolResultMeta(result), result);
   const path = stringValue(args.path ?? args.file ?? args.filename);
 
-  if (name === "write" || name === "edit") {
+  if (name === "write") {
     const content = stringValue(args.content ?? args.newText ?? args.new_text ?? args.replacement ?? args.text ?? args.value);
-    const oldContent = stringValue(args.oldText ?? args.old_text ?? args.old ?? args.original);
-    const diffLines = content ? (name === "edit" && oldContent ? buildUnifiedDiff(oldContent, content, path) : buildWriteDiff(content, path)) : [];
+    const diffLines = content ? buildWriteDiff(content, path) : [];
     return <div className="tool-preview">
-      <div className="tool-preview-head"><span>{name === "write" ? "写入 diff" : "编辑 diff"}</span><code>{path || "file"}</code></div>
+      <div className="tool-preview-head"><span>写入 diff</span><code>{path || "file"}</code></div>
       {diffLines.length > 0 ? <DiffPreview lines={diffLines} /> : result ? <CodePreview text={result} meta={meta} /> : <div className="empty-menu">没有可显示的写入内容</div>}
       {result && content && <details className="tool-mini-details"><summary>工具结果</summary><CodePreview text={result} meta={meta} maxLines={10} /></details>}
+    </div>;
+  }
+
+  if (name === "edit") {
+    const edits = editDiffInputs(args, path);
+    const diffLines = buildEditDiffLines(edits, path);
+    return <div className="tool-preview">
+      <div className="tool-preview-head"><span>编辑 diff</span><code>{path || edits[0]?.path || "file"}</code>{edits.length > 1 && <span className="small">{edits.length} blocks</span>}</div>
+      {diffLines.length > 0 ? <DiffPreview lines={diffLines} /> : result ? <CodePreview text={result} meta={meta} /> : <div className="empty-menu">没有可显示的编辑内容</div>}
+      {result && diffLines.length > 0 && <details className="tool-mini-details"><summary>工具结果</summary><CodePreview text={result} meta={meta} maxLines={10} /></details>}
     </div>;
   }
 
@@ -950,6 +1009,33 @@ function ToolPreview({ message }: { message: ChatMessage }) {
     {message.toolArgs !== undefined && <><div className="tool-preview-head"><span>参数</span></div><CodePreview text={safeJson(message.toolArgs)} maxLines={10} /></>}
     {result && <><div className="tool-preview-head"><span>输出预览</span></div><CodePreview text={result} meta={meta} /></>}
   </div>;
+}
+
+type EditDiffInput = { oldText: string; newText: string; path?: string };
+
+function editDiffInputs(args: Record<string, any>, fallbackPath?: string): EditDiffInput[] {
+  const out: EditDiffInput[] = [];
+  const push = (value: unknown) => {
+    const record = asRecord(value);
+    const oldText = stringValue(record.oldText ?? record.old_text ?? record.old ?? record.original ?? record.before);
+    const newText = stringValue(record.newText ?? record.new_text ?? record.replacement ?? record.replace ?? record.new ?? record.after ?? record.text ?? record.value);
+    const path = stringValue(record.path ?? record.file ?? record.filename) || fallbackPath;
+    if (oldText || newText) out.push({ oldText, newText, path });
+  };
+  for (const key of ["edits", "changes", "replacements"]) {
+    const value = args[key];
+    if (Array.isArray(value)) value.forEach(push);
+  }
+  push(args);
+  return out.filter((edit, idx, list) => list.findIndex((item) => item.oldText === edit.oldText && item.newText === edit.newText && item.path === edit.path) === idx);
+}
+
+function buildEditDiffLines(edits: EditDiffInput[], fallbackPath?: string): DiffLine[] {
+  return edits.flatMap((edit, idx) => {
+    const filePath = edit.path || fallbackPath || "file";
+    const lines = edit.oldText ? buildUnifiedDiff(edit.oldText, edit.newText, filePath) : buildWriteDiff(edit.newText, filePath);
+    return idx === 0 ? lines : [{ type: "meta" as const, text: "" }, ...lines];
+  });
 }
 
 function DiffPreview({ lines, maxLines = 240 }: { lines: DiffLine[]; maxLines?: number }) {
@@ -1570,4 +1656,17 @@ function formatBytes(value: number) {
   if (value >= 1024 * 1024) return `${(value / 1024 / 1024).toFixed(1)}MB`;
   if (value >= 1024) return `${(value / 1024).toFixed(1)}KB`;
   return `${value}B`;
+}
+
+function attachmentImageSrc(attachment: Extract<ChatAttachment, { kind: "image" }>, boxId?: string): string | undefined {
+  if (attachment.path && boxId) return api.downloadUrl(boxId, workspaceRelPath(attachment.path));
+  if (attachment.data) return `data:${attachment.mimeType};base64,${attachment.data}`;
+  return undefined;
+}
+
+function workspaceRelPath(value: string): string {
+  const normalized = value.replace(/\\/g, "/");
+  if (normalized === "/workspace") return ".";
+  if (normalized.startsWith("/workspace/")) return normalized.slice("/workspace/".length);
+  return normalized.replace(/^\/+/, "") || ".";
 }

@@ -45,6 +45,22 @@ export async function registerFileRoutes(app: FastifyInstance) {
     return { ok: true };
   });
 
+  app.post("/api/boxes/:boxId/files/copy", async (req) => {
+    const { boxId } = req.params as { boxId: string };
+    const body = z.object({ source: z.string().min(1), target: z.string().min(1) }).parse(req.body);
+    const box = store.getBox(boxId);
+    await dockerService.copyPath(box, body.source, body.target);
+    return { ok: true };
+  });
+
+  app.post("/api/boxes/:boxId/files/move", async (req) => {
+    const { boxId } = req.params as { boxId: string };
+    const body = z.object({ source: z.string().min(1), target: z.string().min(1) }).parse(req.body);
+    const box = store.getBox(boxId);
+    await dockerService.movePath(box, body.source, body.target);
+    return { ok: true };
+  });
+
   app.delete("/api/boxes/:boxId/files", async (req) => {
     const { boxId } = req.params as { boxId: string };
     const query = z.object({ path: z.string().min(1) }).parse(req.query ?? {});
