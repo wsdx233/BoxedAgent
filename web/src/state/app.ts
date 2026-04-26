@@ -16,6 +16,7 @@ interface AppState {
   updateLastAssistant: (sessionId: string, delta: string) => void;
   updateLastAssistantThinking: (sessionId: string, delta: string) => void;
   upsertToolMessage: (sessionId: string, toolCallId: string, patch: Partial<ChatMessage>) => void;
+  setSessionMessages: (sessionId: string, messages: ChatMessage[]) => void;
   clearMessages: (sessionId: string) => void;
 }
 
@@ -57,5 +58,6 @@ export const useAppStore = create<AppState>((set) => ({
     else list.push({ id: newId(), role: "tool", text: "", toolCallId, timestamp: Date.now(), ...cleanPatch });
     return { messagesBySession: { ...s.messagesBySession, [sessionId]: list } };
   }),
+  setSessionMessages: (sessionId, messages) => set((s) => ({ messagesBySession: { ...s.messagesBySession, [sessionId]: messages } })),
   clearMessages: (sessionId) => set((s) => ({ messagesBySession: { ...s.messagesBySession, [sessionId]: [] } }))
 }));

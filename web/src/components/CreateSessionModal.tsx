@@ -1,6 +1,6 @@
 import { FormEvent, useEffect, useMemo, useState } from "react";
 import { createPortal } from "react-dom";
-import { ArrowUp, Bot, CheckCircle2, CircleAlert, Folder, FolderOpen, FolderPlus, Loader2, Plus } from "lucide-react";
+import { ArrowUp, Bot, CheckCircle2, CircleAlert, Folder, FolderOpen, FolderPlus, Loader2, Plus, RefreshCw } from "lucide-react";
 import { api } from "../lib/api";
 import type { BoxRecord, FileEntry, PiModel } from "../lib/types";
 
@@ -128,7 +128,7 @@ export function CreateSessionModal({ box, onClose, onCreated }: { box: BoxRecord
           <div className="dir-picker-head">
             <div className="row"><FolderOpen size={15} /> <strong>{displayPath}</strong></div>
             <div className="row">
-              <button type="button" className="button-tonal compact" disabled={browsePath === "."} onClick={up}><ArrowUp size={13} /> 上级</button>
+              <button type="button" className="icon-button compact-icon" title="上级" disabled={browsePath === "."} onClick={up}><ArrowUp size={13} /></button>
               <button type="button" className="button-tonal compact" onClick={() => { setShowNewDir(true); setNewDirName(""); }}><FolderPlus size={13} /> 新建目录</button>
               <button type="button" className="button-tonal compact" onClick={() => setCwdAndBrowse(displayPath)}>选择此目录</button>
             </div>
@@ -150,7 +150,7 @@ export function CreateSessionModal({ box, onClose, onCreated }: { box: BoxRecord
         <div className="session-model-picker">
           <div className="dir-picker-head">
             <div className="row"><Bot size={15} /> <strong>模型</strong><span className="small">{selectedModel.provider && selectedModel.modelId ? `${selectedModel.provider}/${selectedModel.modelId}` : "使用 Box 默认"}</span></div>
-            <button type="button" className="button-tonal compact" onClick={loadModels} disabled={loadingModels}>{loadingModels ? <Loader2 size={13} className="spin" /> : null}刷新</button>
+            <button type="button" className="icon-button compact-icon" title="刷新模型" onClick={loadModels} disabled={loadingModels}>{loadingModels ? <Loader2 size={13} className="spin" /> : <RefreshCw size={13} />}</button>
           </div>
           <input className="menu-search" value={modelSearch} onChange={(e) => setModelSearch(e.target.value)} placeholder="搜索 provider / model…" />
           <div className="model-list session-model-list">

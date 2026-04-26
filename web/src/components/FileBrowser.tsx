@@ -1,5 +1,5 @@
 import { type DragEvent, useEffect, useMemo, useRef, useState } from "react";
-import { Download, Folder, File, Trash2, Upload, RefreshCw, FolderPlus, Loader2, Plus } from "lucide-react";
+import { ArrowUp, Download, Folder, File, Trash2, Upload, RefreshCw, FolderPlus, Loader2, Plus } from "lucide-react";
 import { api } from "../lib/api";
 import type { FileEntry } from "../lib/types";
 
@@ -100,8 +100,8 @@ export function FileBrowser({ boxId }: { boxId?: string }) {
   return <div className={`panel file-browser-panel ${dragActive ? "drag-active" : ""}`} onDragEnter={handleDragEnter} onDragOver={handleDragOver} onDragLeave={handleDragLeave} onDrop={handleDrop}>
     {dragActive && <div className="drop-overlay file-drop-overlay"><Upload size={28} /><strong>拖放文件到这里上传</strong><span>目标目录：{path === "." ? "/workspace" : `/workspace/${path}`}</span></div>}
     <div className="toolbar">
-      <button type="button" onClick={() => setPath(parent)}>上级</button>
-      <button type="button" onClick={load}><RefreshCw size={15} /></button>
+      <button type="button" className="icon-button compact-icon" title="上级" onClick={() => setPath(parent)}><ArrowUp size={15} /></button>
+      <button type="button" className="icon-button compact-icon" title="刷新" onClick={load}><RefreshCw size={15} /></button>
       <button type="button" onClick={() => fileInputRef.current?.click()} disabled={uploading}><Upload size={15} /> {uploading ? "上传中…" : "上传"}</button>
       <input ref={fileInputRef} type="file" hidden multiple onChange={async (e) => { const files = e.currentTarget.files; e.currentTarget.value = ""; await uploadFiles(files); }} />
       <button type="button" onClick={() => { setShowNewDir(true); setNewDirName(""); }}><FolderPlus size={15} /> 新建目录</button>

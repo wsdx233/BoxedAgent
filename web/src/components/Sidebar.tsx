@@ -1,6 +1,6 @@
 import { useEffect, useState, type FormEvent, type MouseEvent, type ReactNode } from "react";
 import { createPortal } from "react-dom";
-import { Boxes, Copy, Edit3, MoreVertical, Play, Plus, Square, Trash2 } from "lucide-react";
+import { Boxes, Copy, Edit3, MoreVertical, Play, Plus, RefreshCw, Square, Trash2 } from "lucide-react";
 import { api } from "../lib/api";
 import { useAppStore } from "../state/app";
 import type { AgentSessionRecord, BoxRecord } from "../lib/types";
@@ -8,7 +8,7 @@ import { CreateSessionModal } from "./CreateSessionModal";
 
 type ContextTarget = { kind: "box"; id: string; x: number; y: number } | { kind: "session"; id: string; x: number; y: number };
 
-export function Sidebar({ onNewBox }: { onNewBox: () => void }) {
+export function Sidebar({ onNewBox, onSessionSelected }: { onNewBox: () => void; onSessionSelected?: () => void }) {
   const { boxes, sessions, activeBoxId, activeSessionId, setActiveBox, setActiveSession, setBoxes, setSessions } = useAppStore();
   const [showCreateSession, setShowCreateSession] = useState(false);
   const [menu, setMenu] = useState<ContextTarget>();
@@ -64,14 +64,21 @@ export function Sidebar({ onNewBox }: { onNewBox: () => void }) {
 
   return <aside className="sidebar">
     <div className="header"><div className="logo"><Boxes size={18} /> BoxedAgent</div><button className="primary" onClick={onNewBox}><Plus size={15} /></button></div>
-    <div className="list">
-      <div className="row space"><strong>Boxes</strong><button onClick={refresh}>刷新</button></div>
-      {boxes.map((box) => <BoxItem key={box.id} box={box} active={box.id === activeBoxId} onSelect={() => setActiveBox(box.id)} onContextMenu={(event) => openBoxMenu(event, box)} onMenu={(event) => openBoxMenu(event, box)} />)}
-      <hr style={{ borderColor: "var(--border)" }} />
-      <div className="row space"><strong>Sessions</strong><button disabled={!activeBoxId} onClick={() => setShowCreateSession(true)}><Plus size={15} /></button></div>
-      {boxSessions.map((session) => <SessionItem key={session.id} session={session} active={session.id === activeSessionId} onSelect={() => setActiveSession(session.id)} onContextMenu={(event) => openSessionMenu(event, session)} onMenu={(event) => openSessionMenu(event, session)} />)}
+    <div className="sidebar-sections">
+      <section className="sidebar-section boxes-section">
+        <div className="sidebar-section-head"><strong>Boxes</strong><button className="icon-button compact-icon" title="刷新" onClick={refresh}><RefreshCw size={15} /></button></div>
+        <div className="sidebar-scroll">
+          {boxes.map((box) => <BoxItem key={box.id} box={box} active={box.id === activeBoxId} onSelect={() => setActiveBox(box.id)} onContextMenu={(event) => openBoxMenu(event, box)} onMenu={(event) => openBoxMenu(event, box)} />)}
+        </div>
+      </section>
+      <section className="sidebar-section sessions-section">
+        <div className="sidebar-section-head"><strong>Sessions</strong><button className="icon-button compact-icon" title="新建 Session" disabled={!activeBoxId} onClick={() => setShowCreateSession(true)}><Plus size={15} /></button></div>
+        <div className="sidebar-scroll">
+          {boxSessions.map((session) => <SessionItem key={session.id} session={session} active={session.id === activeSessionId} onSelect={() => { setActiveSession(session.id); onSessionSelected?.(); }} onContextMenu={(event) => openSessionMenu(event, session)} onMenu={(event) => openSessionMenu(event, session)} />)}
+        </div>
+      </section>
     </div>
-    {showCreateSession && activeBox && <CreateSessionModal box={activeBox} onClose={() => setShowCreateSession(false)} onCreated={async (id) => { setActiveSession(id); await refresh(); }} />}
+    {showCreateSession && activeBox && <CreateSessionModal box={activeBox} onClose={() => setShowCreateSession(false)} onCreated={async (id) => { setActiveSession(id); onSessionSelected?.(); await refresh(); }} />}
     {menu && createPortal(<ContextMenu x={menu.x} y={menu.y} onClose={() => setMenu(undefined)} items={menu.kind === "box" ? boxMenuItems : sessionMenuItems} />, document.body)}
     {renameTarget && <RenameDialog target={renameTarget} onClose={() => setRenameTarget(undefined)} onSubmit={async (name) => { await applyRename(renameTarget, name); setRenameTarget(undefined); }} />}
   </aside>;
@@ -100,8 +107,7 @@ function SessionItem({ session, active, onSelect, onContextMenu, onMenu }: { ses
         <button className="card-menu-button" title="操作" onClick={onMenu} onContextMenu={onMenu}><MoreVertical size={16} /></button>
       </div>
     </div>
-    <div className="small">{session.model || "默认模型"}</div>
-    <div className="small">{session.cwd || "/workspace"}</div>
+    <div className="small session-meta-line"><span>{session.model || "默认模型"}</span><span>·</span><span>{session.cwd || "/workspace"}</span></div>
     {session.error && <div className="small" style={{ color: "var(--red)" }}>{session.error}</div>}
   </div>;
 }

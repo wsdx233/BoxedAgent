@@ -2,7 +2,7 @@ import { FormEvent, memo, type Dispatch, type DragEvent, type ReactNode, type Se
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import rehypeHighlight from "rehype-highlight";
-import { Archive, Bot, Brain, CheckCircle2, ChevronDown, CircleAlert, Copy, Loader2, Paperclip, Send, Sparkles, Square, Wrench } from "lucide-react";
+import { Archive, Bot, Brain, CheckCircle2, ChevronDown, CircleAlert, Copy, Loader2, Paperclip, RefreshCw, Send, Sparkles, Square, Wrench } from "lucide-react";
 import { api, wsUrl } from "../lib/api";
 import { newId } from "../lib/id";
 import type { AgentSessionRecord, ChatAttachment, ChatMessage, PiModel, SessionStats, ThinkingLevel, ToolResultMeta } from "../lib/types";
@@ -42,7 +42,7 @@ export function ChatPane({ boxId, sessionId }: { boxId?: string; sessionId?: str
     updateLastAssistant,
     updateLastAssistantThinking,
     upsertToolMessage,
-    clearMessages,
+    setSessionMessages,
     setSessions
   } = useAppStore();
   const [text, setText] = useState("");
@@ -62,6 +62,7 @@ export function ChatPane({ boxId, sessionId }: { boxId?: string; sessionId?: str
   const [isNearBottom, setIsNearBottom] = useState(true);
   const [dragActive, setDragActive] = useState(false);
   const [uploadingFiles, setUploadingFiles] = useState(false);
+  const [messagesLoading, setMessagesLoading] = useState(false);
   const messagesRef = useRef<HTMLDivElement>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -215,13 +216,18 @@ export function ChatPane({ boxId, sessionId }: { boxId?: string; sessionId?: str
         void refreshSessionStats(sessionId);
       }
     };
-    void api.messages(sessionId).then((res) => {
-      clearMessages(sessionId);
-      for (const m of normalizePiMessages(res.messages)) appendMessage(sessionId, m);
-    }).catch(() => undefined);
+    let cancelled = false;
+    setMessagesLoading(true);
+    void api.messages(sessionId).then(async (res) => {
+      await yieldToBrowser();
+      const normalized = normalizePiMessages(res.messages);
+      if (!cancelled) setSessionMessages(sessionId, normalized);
+    }).catch(() => undefined).finally(() => {
+      if (!cancelled) setMessagesLoading(false);
+    });
     void refreshSessionStats(sessionId);
-    return () => ws.close();
-  }, [sessionId, appendMessage, clearMessages, updateLastAssistant, updateLastAssistantThinking, upsertToolMessage]);
+    return () => { cancelled = true; ws.close(); };
+  }, [sessionId, appendMessage, setSessionMessages, updateLastAssistant, updateLastAssistantThinking, upsertToolMessage]);
 
   async function submit(e?: FormEvent, modeOverride?: SendMode) {
     e?.preventDefault();
@@ -239,8 +245,8 @@ export function ChatPane({ boxId, sessionId }: { boxId?: string; sessionId?: str
       appendMessage(sessionId, { id: newId(), role: "system", text: `读取 @文件引用失败：${err instanceof Error ? err.message : String(err)}`, timestamp: Date.now() });
       return;
     }
-    const modeToUse = modeOverride ?? sendMode;
     const activeAtSubmit = isWorking;
+    const modeToUse = activeAtSubmit ? (modeOverride ?? sendMode) : "normal";
     const extraImages = images
       .filter((img) => !img.path || !expanded.referencedPaths.has(img.path))
       .map(({ name: _name, path: _path, size: _size, ...img }) => img);
@@ -507,7 +513,8 @@ export function ChatPane({ boxId, sessionId }: { boxId?: string; sessionId?: str
     </div>
 
     <div className="messages" ref={messagesRef} onScroll={handleScroll}>
-      {messages.length === 0 && <div className="welcome-card">
+      {messagesLoading && <div className="session-loading-card"><Loader2 size={18} className="spin" /><strong>正在加载 Session…</strong><span>历史消息会在后台恢复，界面仍可操作。</span></div>}
+      {!messagesLoading && messages.length === 0 && <div className="welcome-card">
         <div className="welcome-orb"><Sparkles size={24} /></div>
         <h2>准备好开始了吗？</h2>
         <p>像 Claude 一样自然地描述任务。BoxedAgent 会把上下文、文件和工具调用整合到这个 Box 内的 pi agent。</p>
@@ -547,7 +554,7 @@ export function ChatPane({ boxId, sessionId }: { boxId?: string; sessionId?: str
           <div className="control-menu-anchor">
             <ControlMenuButton active={openMenu === "model"} onClick={() => toggleMenu("model")} icon={<Bot size={16} />} label={currentModel.model ?? "模型"} />
             {openMenu === "model" && <MenuPanel className="model-menu">
-              <MenuTitle icon={<Bot size={15} />} title="模型" subtitle="来自 pi RPC get_available_models，等价于 TUI /models 列表" action={<button type="button" className="button-tonal compact" onClick={() => ensureModels(true)}>刷新</button>} />
+              <MenuTitle icon={<Bot size={15} />} title="模型" subtitle="来自 pi RPC get_available_models，等价于 TUI /models 列表" action={<button type="button" className="icon-button compact-icon" title="刷新模型" onClick={() => ensureModels(true)}><RefreshCw size={13} /></button>} />
               <input className="menu-search" value={modelSearch} onChange={(e) => setModelSearch(e.target.value)} placeholder="搜索 provider / model…" />
               {modelLoading && <div className="menu-loading"><Loader2 size={14} className="spin" /> 正在加载模型…</div>}
               {!modelLoading && visibleModels.length === 0 && <div className="empty-menu">没有可显示的模型</div>}
@@ -582,13 +589,13 @@ export function ChatPane({ boxId, sessionId }: { boxId?: string; sessionId?: str
         </div>
 
         <div className="send-cluster">
-          <span className="send-mode-label">{isWorking ? (canSend ? "选择发送方式" : "停止生成") : SEND_MODES.find((item) => item.value === sendMode)?.label}</span>
+          <span className="send-mode-label">{isWorking ? (canSend ? "选择发送方式" : "停止生成") : "发送"}</span>
           <div className="send-menu-anchor">
             {isWorking && !canSend ? <button type="button" className="send-fab stop-fab" title="中止当前任务" onClick={abortTurn}><Square size={19} /></button> : <>
-              <button type="button" className={`send-fab ${canSend ? "" : "idle"}`} title={isWorking ? "选择发送方式" : "发送 / 队列"} onClick={() => toggleMenu("send")}><Send size={20} /></button>
-              {openMenu === "send" && <MenuPanel className="send-menu">
-                <MenuTitle icon={<Send size={15} />} title="发送方式" subtitle={isWorking ? "当前 agent 正在处理：立即发送会先中断当前 turn；Steer / Follow-up 会加入队列。" : "选择后立即发送；Enter 使用当前方式"} />
-                {SEND_MODES.map((item) => <MenuItem key={item.value} selected={sendMode === item.value} onClick={() => chooseSendMode(item.value)} title={item.label} description={isWorking && item.value === "normal" ? "中断当前 turn，然后立即发送这条消息" : item.description} />)}
+              <button type="button" className={`send-fab ${canSend ? "" : "idle"}`} title={isWorking ? "选择发送方式" : "发送"} onClick={() => { if (isWorking) toggleMenu("send"); else void submit(undefined, "normal"); }}><Send size={20} /></button>
+              {openMenu === "send" && isWorking && <MenuPanel className="send-menu">
+                <MenuTitle icon={<Send size={15} />} title="发送方式" subtitle="当前 agent 正在处理：立即发送会先中断当前 turn；Steer / Follow-up 会加入队列。" />
+                {SEND_MODES.map((item) => <MenuItem key={item.value} selected={sendMode === item.value} onClick={() => chooseSendMode(item.value)} title={item.label} description={item.value === "normal" ? "中断当前 turn，然后立即发送这条消息" : item.description} />)}
               </MenuPanel>}
             </>}
           </div>
@@ -859,6 +866,14 @@ function CopyButton({ text }: { text: string }) {
 
 function hasDraggedFiles(event: DragEvent<HTMLElement>) {
   return Array.from(event.dataTransfer?.types ?? []).includes("Files");
+}
+
+function yieldToBrowser(): Promise<void> {
+  return new Promise((resolve) => {
+    const idle = (window as any).requestIdleCallback as undefined | ((cb: () => void, options?: { timeout: number }) => number);
+    if (idle) idle(() => resolve(), { timeout: 180 });
+    else window.setTimeout(resolve, 0);
+  });
 }
 
 async function filesToImages(files: Iterable<File> | null, uploaded?: Map<File, { path: string }>) {
