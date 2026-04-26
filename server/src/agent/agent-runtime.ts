@@ -38,7 +38,13 @@ export class AgentRuntime {
   private workRequested = false;
   private liveStatus?: AgentSessionStatus;
 
-  constructor(public readonly record: AgentSessionRecord, private readonly box: BoxRecord) {}
+  constructor(public record: AgentSessionRecord, private box: BoxRecord) {}
+
+  rebind(record: AgentSessionRecord, box: BoxRecord): void {
+    this.record = record;
+    this.box = box;
+    this.liveStatus = undefined;
+  }
 
   isActive(): boolean {
     return Boolean(this.stream && !this.stopped);
@@ -136,6 +142,19 @@ export class AgentRuntime {
     await this.start();
     const data = await this.send({ type: "get_messages" }) as any;
     return Array.isArray(data?.messages) ? data.messages : [];
+  }
+
+  async forkMessages(): Promise<Array<{ entryId: string; text: string }>> {
+    await this.start();
+    const data = await this.send({ type: "get_fork_messages" }, 30_000) as any;
+    return Array.isArray(data?.messages) ? data.messages : [];
+  }
+
+  async fork(entryId: string): Promise<{ result: { text?: string; cancelled?: boolean }; state: AgentStateSnapshot }> {
+    await this.start();
+    const result = await this.send({ type: "fork", entryId }, 120_000) as { text?: string; cancelled?: boolean };
+    const state = await this.send({ type: "get_state" }, 30_000) as AgentStateSnapshot;
+    return { result, state };
   }
 
   async availableModels(): Promise<PiModel[]> {

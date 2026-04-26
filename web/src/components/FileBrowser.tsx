@@ -103,7 +103,7 @@ export function FileBrowser({ boxId }: { boxId?: string }) {
       <button type="button" className="icon-button compact-icon" title="上级" onClick={() => setPath(parent)}><ArrowUp size={15} /></button>
       <button type="button" className="icon-button compact-icon" title="刷新" onClick={load}><RefreshCw size={15} /></button>
       <button type="button" onClick={() => fileInputRef.current?.click()} disabled={uploading}><Upload size={15} /> {uploading ? "上传中…" : "上传"}</button>
-      <input ref={fileInputRef} type="file" hidden multiple onChange={async (e) => { const files = e.currentTarget.files; e.currentTarget.value = ""; await uploadFiles(files); }} />
+      <input ref={fileInputRef} type="file" hidden multiple onChange={async (e) => { const files = Array.from(e.currentTarget.files ?? []); e.currentTarget.value = ""; await uploadFiles(files); }} />
       <button type="button" onClick={() => { setShowNewDir(true); setNewDirName(""); }}><FolderPlus size={15} /> 新建目录</button>
     </div>
     {showNewDir && <div className="dir-create-row file-create-row">

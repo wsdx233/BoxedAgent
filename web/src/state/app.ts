@@ -8,6 +8,7 @@ interface AppState {
   activeBoxId?: string;
   activeSessionId?: string;
   messagesBySession: Record<string, ChatMessage[]>;
+  composerDrafts: Record<string, string>;
   setBoxes: (boxes: BoxRecord[]) => void;
   setSessions: (sessions: AgentSessionRecord[]) => void;
   setActiveBox: (id?: string) => void;
@@ -17,6 +18,7 @@ interface AppState {
   updateLastAssistantThinking: (sessionId: string, delta: string) => void;
   upsertToolMessage: (sessionId: string, toolCallId: string, patch: Partial<ChatMessage>) => void;
   setSessionMessages: (sessionId: string, messages: ChatMessage[]) => void;
+  setComposerDraft: (sessionId: string, draft?: string) => void;
   clearMessages: (sessionId: string) => void;
 }
 
@@ -24,6 +26,7 @@ export const useAppStore = create<AppState>((set) => ({
   boxes: [],
   sessions: [],
   messagesBySession: {},
+  composerDrafts: {},
   setBoxes: (boxes) => set((s) => {
     const activeBoxId = s.activeBoxId && boxes.some((b) => b.id === s.activeBoxId) ? s.activeBoxId : boxes[0]?.id;
     const activeSessionId = activeBoxId === s.activeBoxId ? s.activeSessionId : undefined;
@@ -59,5 +62,11 @@ export const useAppStore = create<AppState>((set) => ({
     return { messagesBySession: { ...s.messagesBySession, [sessionId]: list } };
   }),
   setSessionMessages: (sessionId, messages) => set((s) => ({ messagesBySession: { ...s.messagesBySession, [sessionId]: messages } })),
+  setComposerDraft: (sessionId, draft) => set((s) => {
+    const drafts = { ...s.composerDrafts };
+    if (draft === undefined) delete drafts[sessionId];
+    else drafts[sessionId] = draft;
+    return { composerDrafts: drafts };
+  }),
   clearMessages: (sessionId) => set((s) => ({ messagesBySession: { ...s.messagesBySession, [sessionId]: [] } }))
 }));

@@ -45,6 +45,65 @@ export class AgentManager {
     return runtime.abort();
   }
 
+  async duplicateSession(id: string, input: { name?: string; autostart?: boolean } = {}): Promise<AgentSessionRecord> {
+    const source = store.getSession(id);
+    const now = new Date().toISOString();
+    const session: AgentSessionRecord = {
+      id: store.newSessionId(),
+      boxId: source.boxId,
+      name: input.name?.trim() || `${source.name} 复刻`,
+      status: "idle",
+      cwd: normalizeSessionCwd(source.cwd),
+      provider: source.provider,
+      model: source.model,
+      thinkingLevel: source.thinkingLevel,
+      autoCompactionEnabled: source.autoCompactionEnabled,
+      createdAt: now,
+      updatedAt: now
+    };
+    const saved = await store.upsertSession(session);
+    if (input.autostart ?? true) await this.start(saved.id);
+    wsHub.publishBox(source.boxId, { type: "sessions_changed" });
+    return store.getSession(saved.id);
+  }
+
+  async forkMessages(id: string): Promise<Array<{ entryId: string; text: string }>> {
+    const runtime = await this.runtime(id);
+    return runtime.forkMessages();
+  }
+
+  async forkSession(id: string, input: { entryId: string; name?: string }): Promise<{ session: AgentSessionRecord; text?: string; cancelled?: boolean }> {
+    const source = store.getSession(id);
+    const box = store.getBox(source.boxId);
+    const runtime = await this.runtime(id);
+    const { result, state } = await runtime.fork(input.entryId);
+    if (result.cancelled) return { session: source, text: result.text, cancelled: true };
+    const now = new Date().toISOString();
+    const model = state.model as PiModel | null | undefined;
+    const session: AgentSessionRecord = {
+      id: store.newSessionId(),
+      boxId: source.boxId,
+      name: input.name?.trim() || `${source.name} fork`,
+      status: "running",
+      cwd: normalizeSessionCwd(source.cwd),
+      provider: modelProvider(model) ?? source.provider,
+      model: model?.id ?? source.model,
+      thinkingLevel: isThinkingLevel(state.thinkingLevel) ? state.thinkingLevel : source.thinkingLevel,
+      autoCompactionEnabled: typeof state.autoCompactionEnabled === "boolean" ? state.autoCompactionEnabled : source.autoCompactionEnabled,
+      sessionFile: typeof state.sessionFile === "string" ? state.sessionFile : source.sessionFile,
+      createdAt: now,
+      updatedAt: now,
+      lastActiveAt: now
+    };
+    const saved = await store.upsertSession(session);
+    await store.patchSession(source.id, { status: "stopped", lastActiveAt: now }).catch(() => undefined);
+    this.runtimes.delete(source.id);
+    runtime.rebind(saved, box);
+    this.runtimes.set(saved.id, runtime);
+    wsHub.publishBox(source.boxId, { type: "sessions_changed" });
+    return { session: store.getSession(saved.id), text: result.text, cancelled: false };
+  }
+
   async stop(id: string) {
     const runtime = this.runtimes.get(id);
     if (runtime) {
@@ -149,6 +208,15 @@ function normalizeSessionCwd(cwd?: string): string {
   const value = cwd?.trim() || "/workspace";
   if (value === "/workspace" || value.startsWith("/workspace/")) return value.replace(/\/+$/, "") || "/workspace";
   return "/workspace";
+}
+
+function isThinkingLevel(value: unknown): value is ThinkingLevel {
+  return value === "off" || value === "minimal" || value === "low" || value === "medium" || value === "high" || value === "xhigh";
+}
+
+function modelProvider(model: PiModel | null | undefined): string | undefined {
+  const provider = model?.provider ?? model?.providerId ?? model?.providerName;
+  return typeof provider === "string" && provider.trim() ? provider.trim() : undefined;
 }
 
 export const agentManager = new AgentManager();

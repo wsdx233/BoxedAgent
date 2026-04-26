@@ -24,6 +24,8 @@ const ThinkingLevelBody = z.object({ level: z.enum(["off", "minimal", "low", "me
 const ModelBody = z.object({ provider: z.string().min(1), modelId: z.string().min(1) });
 const AutoCompactionBody = z.object({ enabled: z.boolean() });
 const CompactBody = z.object({ customInstructions: z.string().optional() }).default({});
+const DuplicateBody = z.object({ name: z.string().optional(), autostart: z.boolean().optional() }).default({});
+const ForkBody = z.object({ entryId: z.string().min(1), name: z.string().optional() });
 
 export async function registerSessionRoutes(app: FastifyInstance) {
   app.get("/api/sessions", async (req) => {
@@ -53,6 +55,18 @@ export async function registerSessionRoutes(app: FastifyInstance) {
   app.post("/api/sessions/:sessionId/abort", async (req) => {
     await agentManager.abort((req.params as any).sessionId);
     return { ok: true };
+  });
+
+  app.post("/api/sessions/:sessionId/duplicate", async (req) => {
+    const body = DuplicateBody.parse(req.body ?? {});
+    return { session: await agentManager.duplicateSession((req.params as any).sessionId, body) };
+  });
+
+  app.get("/api/sessions/:sessionId/fork-messages", async (req) => ({ messages: await agentManager.forkMessages((req.params as any).sessionId) }));
+
+  app.post("/api/sessions/:sessionId/fork", async (req) => {
+    const body = ForkBody.parse(req.body ?? {});
+    return agentManager.forkSession((req.params as any).sessionId, body);
   });
 
   app.post("/api/sessions/:sessionId/prompt", async (req) => {

@@ -1,4 +1,4 @@
-import { FormEvent, memo, type Dispatch, type DragEvent, type ReactNode, type SetStateAction, useEffect, useMemo, useRef, useState } from "react";
+import { FormEvent, memo, type Dispatch, type DragEvent, type PointerEvent as ReactPointerEvent, type ReactNode, type SetStateAction, useEffect, useMemo, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import rehypeHighlight from "rehype-highlight";
@@ -43,6 +43,7 @@ export function ChatPane({ boxId, sessionId }: { boxId?: string; sessionId?: str
     updateLastAssistantThinking,
     upsertToolMessage,
     setSessionMessages,
+    setComposerDraft,
     setSessions
   } = useAppStore();
   const [text, setText] = useState("");
@@ -60,6 +61,8 @@ export function ChatPane({ boxId, sessionId }: { boxId?: string; sessionId?: str
   const [queue, setQueue] = useState<QueueState>({ steering: [], followUp: [] });
   const [turnActive, setTurnActive] = useState(false);
   const [isNearBottom, setIsNearBottom] = useState(true);
+  const [scrollProgress, setScrollProgress] = useState(1);
+  const [progressNodes, setProgressNodes] = useState<Array<{ id: string; label: string; text: string; position: number }>>([]);
   const [dragActive, setDragActive] = useState(false);
   const [uploadingFiles, setUploadingFiles] = useState(false);
   const [messagesLoading, setMessagesLoading] = useState(false);
@@ -84,11 +87,48 @@ export function ChatPane({ boxId, sessionId }: { boxId?: string; sessionId?: str
       : models;
     return filtered.slice(0, 180);
   }, [models, modelSearch]);
-  const renderedMessages = useMemo(() => messages.map((m, idx) => <MemoMessageBubble key={m.id} message={m} isLatest={idx === messages.length - 1} />), [messages]);
+  const renderedMessages = useMemo(() => messages.map((m, idx) => <div key={m.id} id={messageDomId(m.id)} className="message-anchor-wrap"><MemoMessageBubble message={m} isLatest={idx === messages.length - 1} /></div>), [messages]);
+  const userProgressNodes = useMemo(() => messages.filter((m) => m.role === "user").map((m, idx) => ({ id: m.id, label: `#${idx + 1}`, text: m.text || attachmentSummary(m.attachments ?? []) })), [messages]);
 
   useEffect(() => {
     if (isNearBottom) bottomRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
   }, [messages.length, messages.at(-1)?.text, messages.at(-1)?.thinking, messages.at(-1)?.toolResult, isNearBottom]);
+
+  useEffect(() => {
+    let raf = 0;
+    let timeout: number | undefined;
+    const update = () => {
+      const scroller = messagesRef.current;
+      if (!scroller) return;
+      const maxScroll = Math.max(1, scroller.scrollHeight - scroller.clientHeight);
+      setProgressNodes(userProgressNodes.map((node, idx) => {
+        const el = document.getElementById(messageDomId(node.id));
+        const fallback = userProgressNodes.length <= 1 ? 0 : idx / (userProgressNodes.length - 1);
+        if (!el) return { ...node, position: fallback };
+        const targetScrollTop = Math.min(maxScroll, Math.max(0, el.offsetTop - 28));
+        return { ...node, position: targetScrollTop / maxScroll };
+      }));
+      const remaining = scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight;
+      setIsNearBottom(remaining < 180);
+      setScrollProgress(Math.min(1, Math.max(0, scroller.scrollTop / maxScroll)));
+    };
+    const schedule = () => {
+      window.cancelAnimationFrame(raf);
+      raf = window.requestAnimationFrame(update);
+    };
+    schedule();
+    timeout = window.setTimeout(update, 260);
+    const scroller = messagesRef.current;
+    const resizeObserver = typeof ResizeObserver !== "undefined" ? new ResizeObserver(schedule) : undefined;
+    if (scroller) resizeObserver?.observe(scroller);
+    window.addEventListener("resize", schedule);
+    return () => {
+      window.cancelAnimationFrame(raf);
+      if (timeout !== undefined) window.clearTimeout(timeout);
+      resizeObserver?.disconnect();
+      window.removeEventListener("resize", schedule);
+    };
+  }, [userProgressNodes, messages.length, messages.at(-1)?.text, messages.at(-1)?.toolResult]);
 
   useEffect(() => {
     setOpenMenu(undefined);
@@ -96,7 +136,13 @@ export function ChatPane({ boxId, sessionId }: { boxId?: string; sessionId?: str
     setModels([]);
     setStats(null);
     setSendMode("normal");
-  }, [sessionId]);
+    if (!sessionId) return;
+    const draft = useAppStore.getState().composerDrafts[sessionId];
+    if (draft !== undefined) {
+      setText(draft);
+      setComposerDraft(sessionId, undefined);
+    }
+  }, [sessionId, setComposerDraft]);
 
   useEffect(() => {
     setThinkingLevel(session?.thinkingLevel ?? "medium");
@@ -303,7 +349,27 @@ export function ChatPane({ boxId, sessionId }: { boxId?: string; sessionId?: str
   function handleScroll() {
     const el = messagesRef.current;
     if (!el) return;
-    setIsNearBottom(el.scrollHeight - el.scrollTop - el.clientHeight < 180);
+    const remaining = el.scrollHeight - el.scrollTop - el.clientHeight;
+    setIsNearBottom(remaining < 180);
+    const maxScroll = Math.max(1, el.scrollHeight - el.clientHeight);
+    setScrollProgress(Math.min(1, Math.max(0, el.scrollTop / maxScroll)));
+  }
+
+  function scrollToMessage(id: string) {
+    const el = document.getElementById(messageDomId(id));
+    el?.scrollIntoView({ behavior: "smooth", block: "start" });
+  }
+
+  function scrollToBottom() {
+    bottomRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
+  }
+
+  function scrollToProgress(nextProgress: number) {
+    const el = messagesRef.current;
+    if (!el) return;
+    const maxScroll = Math.max(1, el.scrollHeight - el.clientHeight);
+    el.scrollTo({ top: clamp01(nextProgress) * maxScroll, behavior: "auto" });
+    handleScroll();
   }
 
   function patchSessionLocal(patch: Partial<AgentSessionRecord>) {
@@ -512,6 +578,8 @@ export function ChatPane({ boxId, sessionId }: { boxId?: string; sessionId?: str
       <div className={`chat-topbar-state ${activityStatus ?? ""}`} title={activityStatus === "working" ? "模型正在工作" : activityStatus === "running" ? "Agent runtime 已连接" : "空闲"}>{activityStatus && <><span className="live-dot" /> <span>{activityStatus === "working" ? "working" : "running"}</span></>}</div>
     </div>
 
+    <ChatProgressRail progress={scrollProgress} nodes={progressNodes} showBottomButton={!isNearBottom} onProgressChange={scrollToProgress} onJumpToMessage={scrollToMessage} onJumpBottom={scrollToBottom} />
+
     <div className="messages" ref={messagesRef} onScroll={handleScroll}>
       {messagesLoading && <div className="session-loading-card"><Loader2 size={18} className="spin" /><strong>正在加载 Session…</strong><span>历史消息会在后台恢复，界面仍可操作。</span></div>}
       {!messagesLoading && messages.length === 0 && <div className="welcome-card">
@@ -582,7 +650,7 @@ export function ChatPane({ boxId, sessionId }: { boxId?: string; sessionId?: str
             </MenuPanel>}
           </div>
           <input ref={fileInputRef} hidden type="file" multiple onChange={async (e) => {
-            const files = e.currentTarget.files;
+            const files = Array.from(e.currentTarget.files ?? []);
             e.currentTarget.value = "";
             await handleAttachmentFiles(files);
           }} />
@@ -638,7 +706,6 @@ function MessageBubble({ message, isLatest }: { message: ChatMessage; isLatest: 
   if (message.role === "tool") return <ToolCard message={message} isLatest={isLatest} />;
   if (message.role === "system") return <div className="system-line"><CircleAlert size={14} /> <MarkdownText text={message.text} /></div>;
   return <article className={`message-row ${message.role}`}>
-    {message.role === "assistant" && <div className="avatar assistant-avatar"><Sparkles size={16} /></div>}
     <div className={`message ${message.role}`}>
       {message.thinking && <ThinkingBlock text={message.thinking} autoOpen={isLatest} />}
       {message.text ? message.role === "user" ? <UserMessageText text={message.text} /> : <MarkdownText text={message.text} /> : message.thinking ? null : <span className="muted">…</span>}
@@ -648,6 +715,84 @@ function MessageBubble({ message, isLatest }: { message: ChatMessage; isLatest: 
 }
 
 const MemoMessageBubble = memo(MessageBubble);
+
+function ChatProgressRail({ progress, nodes, showBottomButton, onProgressChange, onJumpToMessage, onJumpBottom }: {
+  progress: number;
+  nodes: Array<{ id: string; label: string; text: string; position: number }>;
+  showBottomButton: boolean;
+  onProgressChange: (progress: number) => void;
+  onJumpToMessage: (id: string) => void;
+  onJumpBottom: () => void;
+}) {
+  const trackRef = useRef<HTMLDivElement>(null);
+
+  function progressFromClientY(clientY: number) {
+    const rect = trackRef.current?.getBoundingClientRect();
+    if (!rect || rect.height <= 0) return progress;
+    return clamp01((clientY - rect.top) / rect.height);
+  }
+
+  function beginDrag(event: ReactPointerEvent<HTMLElement>) {
+    event.preventDefault();
+    event.stopPropagation();
+    event.currentTarget.setPointerCapture?.(event.pointerId);
+    document.body.classList.add("dragging-progress");
+    onProgressChange(progressFromClientY(event.clientY));
+    const onMove = (move: PointerEvent) => {
+      move.preventDefault();
+      onProgressChange(progressFromClientY(move.clientY));
+    };
+    const stop = () => {
+      document.body.classList.remove("dragging-progress");
+      document.removeEventListener("pointermove", onMove, true);
+      document.removeEventListener("pointerup", stop, true);
+      document.removeEventListener("pointercancel", stop, true);
+    };
+    document.addEventListener("pointermove", onMove, true);
+    document.addEventListener("pointerup", stop, true);
+    document.addEventListener("pointercancel", stop, true);
+  }
+
+  function nudge(delta: number) {
+    onProgressChange(clamp01(progress + delta));
+  }
+
+  return <div className="chat-progress-rail" aria-label="聊天进度">
+    <div ref={trackRef} className="chat-progress-track" title={`阅读进度 ${Math.round(progress * 100)}%`} onPointerDown={beginDrag}>
+      <span className="chat-progress-fill" style={{ height: `${Math.round(progress * 100)}%` }} />
+      {nodes.map((node) => <button
+        type="button"
+        key={node.id}
+        className="chat-progress-node"
+        style={{ top: `${Math.round(clamp01(node.position) * 100)}%` }}
+        title={node.text}
+        onPointerDown={(event) => event.stopPropagation()}
+        onClick={() => onJumpToMessage(node.id)}
+      >
+        <span className="progress-label">{node.label}</span>
+        <span className="progress-text">{previewText(node.text, 60)}</span>
+      </button>)}
+      <span
+        className="chat-progress-thumb"
+        role="slider"
+        tabIndex={0}
+        aria-label="聊天滚动位置"
+        aria-valuemin={0}
+        aria-valuemax={100}
+        aria-valuenow={Math.round(progress * 100)}
+        style={{ top: `${Math.round(progress * 100)}%` }}
+        onPointerDown={beginDrag}
+        onKeyDown={(event) => {
+          if (event.key === "ArrowUp" || event.key === "ArrowLeft") { event.preventDefault(); nudge(-0.06); }
+          if (event.key === "ArrowDown" || event.key === "ArrowRight") { event.preventDefault(); nudge(0.06); }
+          if (event.key === "Home") { event.preventDefault(); onProgressChange(0); }
+          if (event.key === "End") { event.preventDefault(); onProgressChange(1); }
+        }}
+      />
+    </div>
+    <button type="button" className={`jump-bottom-button ${showBottomButton ? "visible" : ""}`} title="跳转到底部" onClick={onJumpBottom}><span className="progress-label">底</span><span className="progress-text">到底部</span></button>
+  </div>;
+}
 
 function UserMessageText({ text }: { text: string }) {
   const parts = splitFileRefs(text);
@@ -1131,6 +1276,14 @@ function languageFromCodeNode(children: any): string {
 function safeJson(value: unknown): string {
   try { return JSON.stringify(value, null, 2); }
   catch { return String(value); }
+}
+
+function messageDomId(id: string): string {
+  return `chat-message-${id.replace(/[^a-zA-Z0-9_-]/g, "_")}`;
+}
+
+function clamp01(value: number): number {
+  return Math.min(1, Math.max(0, value));
 }
 
 function asRecord(value: unknown): Record<string, any> {

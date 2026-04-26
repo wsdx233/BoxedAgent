@@ -1,6 +1,6 @@
 import { useEffect, useState, type FormEvent, type MouseEvent, type ReactNode } from "react";
 import { createPortal } from "react-dom";
-import { Boxes, Copy, Edit3, MoreVertical, Play, Plus, RefreshCw, Square, Trash2 } from "lucide-react";
+import { Boxes, Copy, Edit3, GitFork, MoreVertical, Play, Plus, RefreshCw, Square, Trash2 } from "lucide-react";
 import { api } from "../lib/api";
 import { useAppStore } from "../state/app";
 import type { AgentSessionRecord, BoxRecord } from "../lib/types";
@@ -9,10 +9,11 @@ import { CreateSessionModal } from "./CreateSessionModal";
 type ContextTarget = { kind: "box"; id: string; x: number; y: number } | { kind: "session"; id: string; x: number; y: number };
 
 export function Sidebar({ onNewBox, onSessionSelected }: { onNewBox: () => void; onSessionSelected?: () => void }) {
-  const { boxes, sessions, activeBoxId, activeSessionId, setActiveBox, setActiveSession, setBoxes, setSessions } = useAppStore();
+  const { boxes, sessions, activeBoxId, activeSessionId, setActiveBox, setActiveSession, setBoxes, setSessions, setComposerDraft } = useAppStore();
   const [showCreateSession, setShowCreateSession] = useState(false);
   const [menu, setMenu] = useState<ContextTarget>();
   const [renameTarget, setRenameTarget] = useState<{ kind: "box" | "session"; id: string; name: string }>();
+  const [forkTarget, setForkTarget] = useState<AgentSessionRecord>();
   const activeBox = boxes.find((box) => box.id === activeBoxId);
   const menuBox = menu?.kind === "box" ? boxes.find((box) => box.id === menu.id) : undefined;
   const menuSession = menu?.kind === "session" ? sessions.find((session) => session.id === menu.id) : undefined;
@@ -26,14 +27,12 @@ export function Sidebar({ onNewBox, onSessionSelected }: { onNewBox: () => void;
   function openBoxMenu(event: MouseEvent, box: BoxRecord) {
     event.preventDefault();
     event.stopPropagation();
-    setActiveBox(box.id);
     setMenu({ kind: "box", id: box.id, x: event.clientX, y: event.clientY });
   }
 
   function openSessionMenu(event: MouseEvent, session: AgentSessionRecord) {
     event.preventDefault();
     event.stopPropagation();
-    setActiveSession(session.id);
     setMenu({ kind: "session", id: session.id, x: event.clientX, y: event.clientY });
   }
 
@@ -56,6 +55,8 @@ export function Sidebar({ onNewBox, onSessionSelected }: { onNewBox: () => void;
 
   const sessionMenuItems = menuSession ? [
     { label: "重命名", icon: <Edit3 size={14} />, onClick: () => setRenameTarget({ kind: "session", id: menuSession.id, name: menuSession.name }) },
+    { label: "Fork", icon: <GitFork size={14} />, onClick: () => setForkTarget(menuSession) },
+    { label: "复刻", icon: <Copy size={14} />, onClick: async () => { const res = await api.duplicateSession(menuSession.id); await refresh(); setActiveSession(res.session.id); onSessionSelected?.(); } },
     menuSession.status === "running" || menuSession.status === "working"
       ? { label: "停止", icon: <Square size={14} />, onClick: async () => { await api.stopSession(menuSession.id); await refresh(); } }
       : { label: "启动", icon: <Play size={14} />, onClick: async () => { await api.startSession(menuSession.id); await refresh(); } },
@@ -78,9 +79,10 @@ export function Sidebar({ onNewBox, onSessionSelected }: { onNewBox: () => void;
         </div>
       </section>
     </div>
-    {showCreateSession && activeBox && <CreateSessionModal box={activeBox} onClose={() => setShowCreateSession(false)} onCreated={async (id) => { setActiveSession(id); onSessionSelected?.(); await refresh(); }} />}
+    {showCreateSession && activeBox && <CreateSessionModal box={activeBox} onClose={() => setShowCreateSession(false)} onCreated={async (id) => { await refresh(); setActiveSession(id); onSessionSelected?.(); }} />}
     {menu && createPortal(<ContextMenu x={menu.x} y={menu.y} onClose={() => setMenu(undefined)} items={menu.kind === "box" ? boxMenuItems : sessionMenuItems} />, document.body)}
     {renameTarget && <RenameDialog target={renameTarget} onClose={() => setRenameTarget(undefined)} onSubmit={async (name) => { await applyRename(renameTarget, name); setRenameTarget(undefined); }} />}
+    {forkTarget && <ForkDialog session={forkTarget} onClose={() => setForkTarget(undefined)} onForked={async (forked, draft) => { await refresh(); if (draft) setComposerDraft(forked.id, draft); setActiveSession(forked.id); onSessionSelected?.(); setForkTarget(undefined); }} />}
   </aside>;
 }
 
@@ -115,6 +117,63 @@ function SessionItem({ session, active, onSelect, onContextMenu, onMenu }: { ses
 function StatusIndicator({ status }: { status: string }) {
   if (status === "running" || status === "working" || status === "stopped") return <span className={`status-dot ${status}`} title={status} aria-label={status} />;
   return <span className={`status ${status}`}>{status}</span>;
+}
+
+function previewText(value: string, max = 120): string {
+  const text = value.replace(/\s+/g, " ").trim();
+  return text.length > max ? `${text.slice(0, max - 1)}…` : text;
+}
+
+function ForkDialog({ session, onClose, onForked }: { session: AgentSessionRecord; onClose: () => void; onForked: (session: AgentSessionRecord, draft?: string) => Promise<void> }) {
+  const [messages, setMessages] = useState<Array<{ entryId: string; text: string }>>([]);
+  const [loading, setLoading] = useState(true);
+  const [forkingId, setForkingId] = useState<string>();
+  const [error, setError] = useState<string>();
+
+  useEffect(() => {
+    let cancelled = false;
+    setLoading(true);
+    setError(undefined);
+    api.forkMessages(session.id).then((res) => {
+      if (!cancelled) setMessages(res.messages ?? []);
+    }).catch((err) => {
+      if (!cancelled) setError(err instanceof Error ? err.message : String(err));
+    }).finally(() => {
+      if (!cancelled) setLoading(false);
+    });
+    return () => { cancelled = true; };
+  }, [session.id]);
+
+  async function fork(entryId: string) {
+    setForkingId(entryId);
+    setError(undefined);
+    try {
+      const res = await api.forkSession(session.id, { entryId });
+      if (!res.cancelled) await onForked(res.session, res.text);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setForkingId(undefined);
+    }
+  }
+
+  return createPortal(<div className="modal-backdrop" onMouseDown={onClose}>
+    <div className="modal fork-modal" onMouseDown={(event) => event.stopPropagation()}>
+      <h2>Fork Session</h2>
+      <p className="small">选择一个用户消息，按 pi TUI 的 /fork 方式从该消息之前分叉，并把该消息内容放入新 Session 输入框。</p>
+      {loading && <div className="menu-loading"><RefreshCw size={14} className="spin" /> 正在读取可 fork 的消息…</div>}
+      {error && <div className="notice error">{error}</div>}
+      {!loading && messages.length === 0 && <div className="empty-menu">当前 Session 还没有可 fork 的用户消息。</div>}
+      <div className="fork-message-list">
+        {messages.map((message, index) => <button type="button" key={message.entryId} className="fork-message-item" disabled={Boolean(forkingId)} onClick={() => fork(message.entryId)}>
+          <span className="fork-message-index">#{index + 1}</span>
+          <span>{previewText(message.text, 180)}</span>
+          {forkingId === message.entryId && <RefreshCw size={13} className="spin" />}
+        </button>)}
+      </div>
+      <div className="row space"><span className="small">源 Session：{session.name}</span><button type="button" onClick={onClose}>关闭</button></div>
+    </div>
+  </div>, document.body);
 }
 
 function RenameDialog({ target, onClose, onSubmit }: { target: { kind: "box" | "session"; name: string }; onClose: () => void; onSubmit: (name: string) => Promise<void> }) {
