@@ -3,7 +3,7 @@ import { ChatPane } from "./components/ChatPane";
 import { CreateBoxModal } from "./components/CreateBoxModal";
 import { RightPanel } from "./components/RightPanel";
 import { Sidebar } from "./components/Sidebar";
-import { api, wsUrl } from "./lib/api";
+import { api, closeWebSocketQuietly, wsUrl } from "./lib/api";
 import { useAppStore } from "./state/app";
 import { Boxes as BoxesIcon, LogOut, MessageSquare, PanelLeftClose, PanelLeftOpen, PanelRightClose, PanelRightOpen, ShieldCheck, Wrench } from "lucide-react";
 
@@ -45,14 +45,14 @@ export function App() {
       if (msg.type === "image_ensure_error") setActivity(`镜像失败：${msg.error}`);
     };
     const timer = setInterval(refresh, 10_000);
-    return () => { ws.close(); clearInterval(timer); };
+    return () => { closeWebSocketQuietly(ws); clearInterval(timer); };
   }, [auth.loading, auth.enabled, auth.authenticated]);
 
   useEffect(() => {
     if (auth.loading || (auth.enabled && !auth.authenticated) || !activeBoxId) return;
     const ws = new WebSocket(wsUrl(`/ws/boxes/${activeBoxId}/events`));
     ws.onmessage = (event) => { const msg = JSON.parse(event.data); if (msg.type === "sessions_changed" || msg.type === "box_updated") void refresh(); };
-    return () => ws.close();
+    return () => closeWebSocketQuietly(ws);
   }, [activeBoxId, auth.loading, auth.enabled, auth.authenticated]);
 
   useEffect(() => {

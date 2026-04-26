@@ -74,3 +74,17 @@ export function wsUrl(path: string) {
   const protocol = location.protocol === "https:" ? "wss:" : "ws:";
   return `${protocol}//${location.host}${path}`;
 }
+
+export function closeWebSocketQuietly(ws: WebSocket | null | undefined) {
+  if (!ws) return;
+  try {
+    if (ws.readyState === WebSocket.CONNECTING) {
+      ws.addEventListener("open", () => ws.close(), { once: true });
+      ws.addEventListener("error", () => undefined, { once: true });
+      return;
+    }
+    if (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CLOSING) ws.close();
+  } catch {
+    // Ignore cleanup races during React StrictMode remounts / rapid session switches.
+  }
+}

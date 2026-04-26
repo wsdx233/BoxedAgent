@@ -3,7 +3,7 @@ import { Maximize2, Minimize2, PlugZap, RotateCcw } from "lucide-react";
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import "@xterm/xterm/css/xterm.css";
-import { wsUrl } from "../lib/api";
+import { closeWebSocketQuietly, wsUrl } from "../lib/api";
 
 export function TerminalPane({ boxId }: { boxId?: string }) {
   const hostRef = useRef<HTMLDivElement>(null);
@@ -126,7 +126,13 @@ export function TerminalPane({ boxId }: { boxId?: string }) {
       window.removeEventListener("resize", scheduleFit);
       ro.disconnect();
       input.dispose();
-      wsRef.current?.close();
+      const ws = wsRef.current;
+      if (ws) {
+        ws.onmessage = null;
+        ws.onerror = null;
+        ws.onclose = null;
+      }
+      closeWebSocketQuietly(ws);
       wsRef.current = undefined;
       fitRef.current = undefined;
       termRef.current = undefined;

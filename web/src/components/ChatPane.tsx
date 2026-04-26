@@ -1,9 +1,9 @@
-import { FormEvent, memo, type Dispatch, type DragEvent, type PointerEvent as ReactPointerEvent, type ReactNode, type SetStateAction, useEffect, useMemo, useRef, useState } from "react";
+import { FormEvent, memo, type Dispatch, type DragEvent, type PointerEvent as ReactPointerEvent, type ReactNode, type SetStateAction, type TouchEvent as ReactTouchEvent, useEffect, useMemo, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import rehypeHighlight from "rehype-highlight";
 import { Archive, Bot, Brain, CheckCircle2, ChevronDown, CircleAlert, Copy, Loader2, Paperclip, RefreshCw, Send, Sparkles, Square, Wrench } from "lucide-react";
-import { api, wsUrl } from "../lib/api";
+import { api, closeWebSocketQuietly, wsUrl } from "../lib/api";
 import { newId } from "../lib/id";
 import type { AgentSessionRecord, ChatAttachment, ChatMessage, PiModel, SessionStats, ThinkingLevel, ToolResultMeta } from "../lib/types";
 import { useAppStore } from "../state/app";
@@ -161,11 +161,13 @@ export function ChatPane({ boxId, sessionId }: { boxId?: string; sessionId?: str
 
   useEffect(() => {
     if (!sessionId) return;
+    let cancelled = false;
     setQueue({ steering: [], followUp: [] });
     expectingTurnRef.current = false;
     setTurnActive(false);
     const ws = new WebSocket(wsUrl(`/ws/sessions/${sessionId}/events`));
     ws.onmessage = (event) => {
+      if (cancelled) return;
       const msg = JSON.parse(event.data);
       if (msg.type === "session_status") {
         if (msg.status === "working") {
@@ -262,7 +264,6 @@ export function ChatPane({ boxId, sessionId }: { boxId?: string; sessionId?: str
         void refreshSessionStats(sessionId);
       }
     };
-    let cancelled = false;
     setMessagesLoading(true);
     void api.messages(sessionId).then(async (res) => {
       await yieldToBrowser();
@@ -272,7 +273,7 @@ export function ChatPane({ boxId, sessionId }: { boxId?: string; sessionId?: str
       if (!cancelled) setMessagesLoading(false);
     });
     void refreshSessionStats(sessionId);
-    return () => { cancelled = true; ws.close(); };
+    return () => { cancelled = true; closeWebSocketQuietly(ws); };
   }, [sessionId, appendMessage, setSessionMessages, updateLastAssistant, updateLastAssistantThinking, upsertToolMessage]);
 
   async function submit(e?: FormEvent, modeOverride?: SendMode) {
@@ -524,7 +525,7 @@ export function ChatPane({ boxId, sessionId }: { boxId?: string; sessionId?: str
         setFileAttachments((prev) => [...prev, ...otherFiles.map((file) => ({ kind: "file" as const, name: file.name, path: uploaded.get(file)?.path ?? uploadedPathForName(file.name), size: file.size, mimeType: file.type || undefined }))]);
       }
       const refs = files.map((file) => fileRef(uploaded.get(file)?.path ?? uploadedPathForName(file.name))).join(" ");
-      setText((t) => `${t}${t ? "\n" : ""}请读取附件：${refs}`);
+      setText((t) => `${t}${t ? "\n" : ""}请读取附件： ${refs}`);
     } catch (err) {
       if (sessionId) appendMessage(sessionId, { id: newId(), role: "system", text: `上传附件失败：${err instanceof Error ? err.message : String(err)}`, timestamp: Date.now() });
     } finally {
@@ -753,12 +754,36 @@ function ChatProgressRail({ progress, nodes, showBottomButton, onProgressChange,
     document.addEventListener("pointercancel", stop, true);
   }
 
+  function beginTouchDrag(event: ReactTouchEvent<HTMLElement>) {
+    const touch = event.touches[0];
+    if (!touch) return;
+    event.preventDefault();
+    event.stopPropagation();
+    document.body.classList.add("dragging-progress");
+    onProgressChange(progressFromClientY(touch.clientY));
+    const onMove = (move: TouchEvent) => {
+      const nextTouch = move.touches[0] ?? move.changedTouches[0];
+      if (!nextTouch) return;
+      move.preventDefault();
+      onProgressChange(progressFromClientY(nextTouch.clientY));
+    };
+    const stop = () => {
+      document.body.classList.remove("dragging-progress");
+      document.removeEventListener("touchmove", onMove, true);
+      document.removeEventListener("touchend", stop, true);
+      document.removeEventListener("touchcancel", stop, true);
+    };
+    document.addEventListener("touchmove", onMove, { capture: true, passive: false });
+    document.addEventListener("touchend", stop, true);
+    document.addEventListener("touchcancel", stop, true);
+  }
+
   function nudge(delta: number) {
     onProgressChange(clamp01(progress + delta));
   }
 
   return <div className="chat-progress-rail" aria-label="聊天进度">
-    <div ref={trackRef} className="chat-progress-track" title={`阅读进度 ${Math.round(progress * 100)}%`} onPointerDown={beginDrag}>
+    <div ref={trackRef} className="chat-progress-track" title={`阅读进度 ${Math.round(progress * 100)}%`} onPointerDown={beginDrag} onTouchStart={beginTouchDrag}>
       <span className="chat-progress-fill" style={{ height: `${Math.round(progress * 100)}%` }} />
       {nodes.map((node) => <button
         type="button"
@@ -782,6 +807,7 @@ function ChatProgressRail({ progress, nodes, showBottomButton, onProgressChange,
         aria-valuenow={Math.round(progress * 100)}
         style={{ top: `${Math.round(progress * 100)}%` }}
         onPointerDown={beginDrag}
+        onTouchStart={beginTouchDrag}
         onKeyDown={(event) => {
           if (event.key === "ArrowUp" || event.key === "ArrowLeft") { event.preventDefault(); nudge(-0.06); }
           if (event.key === "ArrowDown" || event.key === "ArrowRight") { event.preventDefault(); nudge(0.06); }
@@ -1334,41 +1360,56 @@ type ExpandedFileRefs = { message: string; images: Array<{ type: "image"; data: 
 async function expandFileReferencesForPrompt(boxId: string, cwd: string, message: string): Promise<ExpandedFileRefs> {
   const refs = parseFileRefs(message);
   if (!refs.length) return { message, images: [], referencedPaths: new Set() };
-  const seen = new Set<string>();
+  const attempted = new Set<string>();
+  const attached = new Set<string>();
   const images: Array<{ type: "image"; data: string; mimeType: string }> = [];
   let fileText = "";
   for (const ref of refs) {
-    const resolved = resolveWorkspaceReference(ref.path, cwd);
-    if (seen.has(resolved.absPath)) continue;
-    seen.add(resolved.absPath);
-    const file = await fetchWorkspaceFile(boxId, resolved);
-    if (file.isImage) {
-      images.push({ type: "image", data: file.data, mimeType: file.mimeType });
-      fileText += `<file name="${resolved.absPath}"></file>\n`;
-    } else {
-      fileText += `<file name="${resolved.absPath}">\n${file.text}\n</file>\n`;
+    let resolved: { absPath: string; relPath: string };
+    try {
+      resolved = resolveWorkspaceReference(ref.path, cwd);
+    } catch {
+      continue;
+    }
+    if (attempted.has(resolved.absPath)) continue;
+    attempted.add(resolved.absPath);
+    try {
+      const file = await fetchWorkspaceFile(boxId, resolved);
+      attached.add(resolved.absPath);
+      if (file.isImage) {
+        images.push({ type: "image", data: file.data, mimeType: file.mimeType });
+        fileText += `<file name="${resolved.absPath}"></file>\n`;
+      } else {
+        fileText += `<file name="${resolved.absPath}">\n${file.text}\n</file>\n`;
+      }
+    } catch {
+      // Match CLI-like convenience without making normal @ tokens (e.g. npm scoped
+      // packages such as @playwright/mcp@latest) fail the prompt. Missing or
+      // unreadable refs are left as plain user text and are not attached.
     }
   }
-  return { message: `${fileText}${message}`, images, referencedPaths: seen };
+  return { message: fileText ? `${fileText}${message}` : message, images, referencedPaths: attached };
 }
 
 function parseFileRefs(text: string): ParsedFileRef[] {
   const refs: ParsedFileRef[] = [];
-  const re = /(^|\s)@(?:("((?:\\.|[^"\\])+)"|'([^']+)'|([^\s]+)))/g;
+  const re = /(\s)@(?:("((?:\\.|[^"\\])+)"|'([^']+)'|([^\s]+)))/g;
   let match: RegExpExecArray | null;
   while ((match = re.exec(text))) {
     const prefix = match[1] ?? "";
     const tokenStart = match.index + prefix.length;
     const quoted = match[3] ? unescapeQuotedRef(match[3]) : match[4] ?? "";
+    const isQuoted = Boolean(quoted);
     let rawPath = quoted || match[5] || "";
     let end = re.lastIndex;
-    if (!quoted) {
+    if (!isQuoted) {
       const stripped = rawPath.replace(/[),.;:!?，。；：！？]+$/g, "");
       end -= rawPath.length - stripped.length;
       rawPath = stripped;
     }
     rawPath = rawPath.trim();
     if (!rawPath || rawPath.startsWith("@")) continue;
+    if (!isQuoted && rawPath.includes("@")) continue;
     refs.push({ raw: text.slice(tokenStart, end), path: rawPath, start: tokenStart, end });
   }
   return refs;

@@ -245,10 +245,11 @@ hr { border: 0; border-top: 1px solid var(--border); margin: 14px 0; }
 .messages { flex: 1; overflow: auto; padding: 28px clamp(42px, 5vw, 76px) 28px clamp(22px, 5vw, 72px); background: radial-gradient(circle at 50% 0, rgba(208,188,255,.08), transparent 34%); scroll-behavior: smooth; scrollbar-width: none; -ms-overflow-style: none; }
 .messages::-webkit-scrollbar { width: 0; height: 0; display: none; }
 .message-anchor-wrap { scroll-margin-top: 92px; }
-.chat-progress-rail { position: absolute; right: 20px; top: max(132px, 24%); bottom: max(172px, 24%); z-index: 25; width: 28px; pointer-events: none; touch-action: none; opacity: .86; transition: opacity .16s ease; }
+.chat-progress-rail { position: absolute; right: 16px; top: max(132px, 24%); bottom: max(172px, 24%); z-index: 25; width: 40px; pointer-events: none; touch-action: none; opacity: .86; transition: opacity .16s ease; }
 .chat-progress-rail:hover, .dragging-progress .chat-progress-rail { opacity: 1; }
-.chat-progress-track { position: relative; width: 8px; height: 100%; margin: 0 auto; border-radius: 999px; background: color-mix(in srgb, var(--md-sys-color-surface-container-highest) 72%, transparent); cursor: ns-resize; pointer-events: auto; touch-action: none; user-select: none; box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--border) 48%, transparent), 0 0 0 6px color-mix(in srgb, var(--md-sys-color-surface-container-lowest) 18%, transparent); }
-.chat-progress-fill { position: absolute; left: 0; right: 0; top: 0; border-radius: inherit; background: linear-gradient(180deg, var(--md-sys-color-primary), var(--md-sys-color-tertiary)); transition: height .16s ease; }
+.chat-progress-track { position: relative; width: 34px; height: 100%; margin: 0 auto; border-radius: 999px; background: transparent; cursor: ns-resize; pointer-events: auto; touch-action: none; user-select: none; }
+.chat-progress-track::before { content: ""; position: absolute; top: 0; bottom: 0; left: 50%; width: 8px; transform: translateX(-50%); border-radius: 999px; background: color-mix(in srgb, var(--md-sys-color-surface-container-highest) 72%, transparent); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--border) 48%, transparent), 0 0 0 6px color-mix(in srgb, var(--md-sys-color-surface-container-lowest) 18%, transparent); }
+.chat-progress-fill { position: absolute; left: 50%; width: 8px; top: 0; transform: translateX(-50%); border-radius: 999px; background: linear-gradient(180deg, var(--md-sys-color-primary), var(--md-sys-color-tertiary)); transition: height .16s ease; }
 .chat-progress-thumb { position: absolute; left: 50%; width: 18px; height: 18px; border-radius: 50%; transform: translate(-50%, -50%); cursor: grab; pointer-events: auto; touch-action: none; user-select: none; background: var(--md-sys-color-on-primary-container); border: 3px solid var(--md-sys-color-primary-container); box-shadow: 0 4px 14px rgba(0,0,0,.32), 0 0 0 4px color-mix(in srgb, var(--md-sys-color-primary) 18%, transparent); outline: none; z-index: 4; }
 .chat-progress-thumb:active, .dragging-progress .chat-progress-thumb { cursor: grabbing; }
 .dragging-progress .messages { scroll-behavior: auto; }
@@ -499,26 +500,37 @@ hr { border: 0; border-top: 1px solid var(--border); margin: 14px 0; }
 
 @media (max-width: 1380px) { .app { grid-template-columns: min(var(--left-width, 330px), 300px) 8px minmax(380px, 1fr) 8px min(var(--right-width, 560px), 500px); } }
 @media (max-width: 1120px) { .app:not(.left-hidden):not(.right-hidden) { grid-template-columns: min(var(--left-width, 330px), 260px) 8px minmax(320px, 1fr) 8px min(var(--right-width, 560px), 380px); } .app.left-hidden:not(.right-hidden) { grid-template-columns: minmax(320px, 1fr) 8px min(var(--right-width, 560px), 380px); } .app.right-hidden:not(.left-hidden) { grid-template-columns: min(var(--left-width, 330px), 260px) 8px minmax(320px, 1fr); } .layout-controls { left: auto; right: 18px; transform: none; } }
+@media (max-width: 980px) {
+  .control-chip { width: 40px; min-width: 40px; max-width: 40px; height: 40px; padding: 0; border-radius: 50%; }
+  .control-chip span, .control-chip > svg:last-child { display: none; }
+  .composer-tools { overflow: visible; }
+  .md-menu { max-height: min(520px, 70dvh); }
+}
 @media (max-width: 780px) {
+  :root { --mobile-nav-height: calc(76px + env(safe-area-inset-bottom)); }
   .desktop-only { display: none !important; }
-  .app, .app.left-hidden, .app.right-hidden, .app.left-hidden.right-hidden { height: calc(100vh - 64px); display: block; grid-template-columns: 1fr !important; padding: 0; gap: 0; }
+  .app, .app.left-hidden, .app.right-hidden, .app.left-hidden.right-hidden { height: calc(100dvh - var(--mobile-nav-height)); display: block; grid-template-columns: 1fr !important; padding: 0; gap: 0; }
+  @supports not (height: 100dvh) { .app, .app.left-hidden, .app.right-hidden, .app.left-hidden.right-hidden { height: calc(100vh - var(--mobile-nav-height)); } }
   .app > .sidebar, .app > .chat, .app > .rightbar, .app > .app-resizer { display: none !important; grid-column: 1 !important; width: 100%; height: 100%; }
   .app.mobile-panel-boxes > .sidebar { display: flex !important; }
   .app.mobile-panel-chat > .chat { display: flex !important; }
   .app.mobile-panel-tools > .rightbar { display: flex !important; }
   .sidebar, .chat, .rightbar { border-radius: 0; border-left: 0; border-right: 0; box-shadow: none; }
   .sidebar-sections { grid-template-rows: minmax(120px, 44%) minmax(140px, 1fr); padding: 10px; gap: 10px; }
-  .rightbar .panel { height: calc(100vh - 116px); }
+  .rightbar .panel { height: calc(100dvh - var(--mobile-nav-height) - 52px); }
   .settings-grid { grid-template-columns: 1fr; }
-  .composer { margin: 0 10px 10px; border-radius: 22px; }
-  .composer-toolbar { align-items: flex-end; }
-  .composer-tools { max-width: calc(100vw - 92px); overflow-x: auto; flex-wrap: nowrap; padding-bottom: 2px; }
-  .control-chip { max-width: 150px; }
+  .composer { margin: 0 10px max(12px, env(safe-area-inset-bottom)); border-radius: 22px; }
+  .composer-toolbar { align-items: center; }
+  .composer-tools { max-width: calc(100vw - 92px); overflow: visible; flex-wrap: nowrap; padding-bottom: 0; }
+  .control-chip { width: 40px; min-width: 40px; max-width: 40px; }
   .send-mode-label { display: none; }
-  .messages { padding: 18px 36px 18px 14px; }
-  .chat-progress-rail { right: 10px; top: max(108px, 24%); bottom: max(148px, 26%); width: 24px; }
-  .chat-progress-track { width: 6px; box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--border) 48%, transparent), 0 0 0 4px color-mix(in srgb, var(--md-sys-color-surface-container-lowest) 18%, transparent); }
-  .chat-progress-thumb { width: 16px; height: 16px; border-width: 3px; }
+  .composer .md-menu { position: fixed; left: 10px !important; right: 10px !important; bottom: calc(var(--mobile-nav-height) + 92px); width: auto !important; max-height: calc(100dvh - var(--mobile-nav-height) - 116px); z-index: 90; }
+  @supports not (height: 100dvh) { .composer .md-menu { max-height: calc(100vh - var(--mobile-nav-height) - 116px); } }
+  .messages { padding: 18px 52px 18px 14px; }
+  .chat-progress-rail { right: 5px; top: max(108px, 24%); bottom: max(148px, 26%); width: 44px; }
+  .chat-progress-track { width: 38px; box-shadow: none; }
+  .chat-progress-track::before, .chat-progress-fill { width: 6px; }
+  .chat-progress-thumb { width: 26px; height: 26px; border-width: 3px; }
   .chat-progress-node { width: 20px; height: 12px; min-height: 12px; }
   .chat-progress-node:hover:not(:disabled), .chat-progress-node:focus-visible { width: min(190px, 72vw); height: 28px; transform: translate(calc(-100% + 12px), -50%); }
   .progress-label { font-size: 9px; }
@@ -526,7 +538,7 @@ hr { border: 0; border-top: 1px solid var(--border); margin: 14px 0; }
   .jump-bottom-button.visible:hover, .jump-bottom-button.visible:focus-visible { width: 82px; height: 28px; transform: translate(calc(-100% + 12px), 0); }
   .message.user { max-width: 88%; }
   .tool-card { margin-left: auto; width: 100%; }
-  .mobile-bottom-nav { position: fixed; left: 0; right: 0; bottom: 0; z-index: 70; display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; padding: 8px max(10px, env(safe-area-inset-left)) calc(8px + env(safe-area-inset-bottom)) max(10px, env(safe-area-inset-right)); border-top: 1px solid var(--border); background: color-mix(in srgb, var(--md-sys-color-surface-container-high) 96%, #000); backdrop-filter: blur(18px); }
+  .mobile-bottom-nav { position: fixed; left: 0; right: 0; bottom: 0; z-index: 70; min-height: var(--mobile-nav-height); display: grid; grid-template-columns: repeat(3, 1fr); align-content: start; gap: 6px; padding: 8px max(10px, env(safe-area-inset-left)) calc(8px + env(safe-area-inset-bottom)) max(10px, env(safe-area-inset-right)); border-top: 1px solid var(--border); background: color-mix(in srgb, var(--md-sys-color-surface-container-high) 96%, #000); backdrop-filter: blur(18px); }
   .mobile-bottom-nav button { min-height: 46px; display: grid; justify-items: center; gap: 2px; padding: 5px 8px; border-radius: 18px; background: transparent; color: var(--muted); font-size: 11px; }
   .mobile-bottom-nav button.active { background: var(--md-sys-color-secondary-container); color: var(--md-sys-color-on-secondary-container); }
   .app-status { bottom: 68px; left: 10px; right: 10px; }
