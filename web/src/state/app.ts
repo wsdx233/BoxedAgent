@@ -51,9 +51,10 @@ export const useAppStore = create<AppState>((set) => ({
   }),
   upsertToolMessage: (sessionId, toolCallId, patch) => set((s) => {
     const list = [...(s.messagesBySession[sessionId] ?? [])];
+    const cleanPatch = Object.fromEntries(Object.entries(patch).filter(([, value]) => value !== undefined)) as Partial<ChatMessage>;
     const idx = list.findIndex((m) => m.role === "tool" && m.toolCallId === toolCallId);
-    if (idx >= 0) list[idx] = { ...list[idx], ...patch, timestamp: Date.now() };
-    else list.push({ id: newId(), role: "tool", text: "", toolCallId, timestamp: Date.now(), ...patch });
+    if (idx >= 0) list[idx] = { ...list[idx], ...cleanPatch, timestamp: Date.now() };
+    else list.push({ id: newId(), role: "tool", text: "", toolCallId, timestamp: Date.now(), ...cleanPatch });
     return { messagesBySession: { ...s.messagesBySession, [sessionId]: list } };
   }),
   clearMessages: (sessionId) => set((s) => ({ messagesBySession: { ...s.messagesBySession, [sessionId]: [] } }))

@@ -1,11 +1,11 @@
-import { FormEvent, type DragEvent, type ReactNode, useEffect, useMemo, useRef, useState } from "react";
+import { FormEvent, memo, type Dispatch, type DragEvent, type ReactNode, type SetStateAction, useEffect, useMemo, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import rehypeHighlight from "rehype-highlight";
 import { Archive, Bot, Brain, CheckCircle2, ChevronDown, CircleAlert, Copy, Loader2, Paperclip, Send, Sparkles, Square, Wrench } from "lucide-react";
 import { api, wsUrl } from "../lib/api";
 import { newId } from "../lib/id";
-import type { AgentSessionRecord, ChatMessage, PiModel, SessionStats, ThinkingLevel, ToolResultMeta } from "../lib/types";
+import type { AgentSessionRecord, ChatAttachment, ChatMessage, PiModel, SessionStats, ThinkingLevel, ToolResultMeta } from "../lib/types";
 import { useAppStore } from "../state/app";
 
 interface QueueState {
@@ -31,6 +31,9 @@ const THINKING_LEVELS: Array<{ value: ThinkingLevel; label: string; description:
   { value: "xhigh", label: "XHigh", description: "超高推理，需模型支持" }
 ];
 
+const ATTACHMENT_UPLOAD_DIR = ".upload";
+const ATTACHMENT_UPLOAD_ABS_DIR = "/workspace/.upload";
+
 export function ChatPane({ boxId, sessionId }: { boxId?: string; sessionId?: string }) {
   const {
     sessions,
@@ -52,7 +55,8 @@ export function ChatPane({ boxId, sessionId }: { boxId?: string; sessionId?: str
   const [modelLoading, setModelLoading] = useState(false);
   const [currentModel, setCurrentModel] = useState<{ provider?: string; model?: string }>({});
   const [stats, setStats] = useState<SessionStats | null>(null);
-  const [images, setImages] = useState<Array<{ type: "image"; data: string; mimeType: string; name: string }>>([]);
+  const [images, setImages] = useState<Array<{ type: "image"; data: string; mimeType: string; name: string; path?: string; size?: number }>>([]);
+  const [fileAttachments, setFileAttachments] = useState<Array<{ kind: "file"; name: string; path: string; size?: number; mimeType?: string }>>([]);
   const [queue, setQueue] = useState<QueueState>({ steering: [], followUp: [] });
   const [turnActive, setTurnActive] = useState(false);
   const [isNearBottom, setIsNearBottom] = useState(true);
@@ -66,10 +70,11 @@ export function ChatPane({ boxId, sessionId }: { boxId?: string; sessionId?: str
   const dragDepthRef = useRef(0);
   const session = sessions.find((s) => s.id === sessionId);
   const messages = sessionId ? messagesBySession[sessionId] ?? [] : [];
-  const canSend = text.trim().length > 0 || images.length > 0;
+  const canSend = text.trim().length > 0 || images.length > 0 || fileAttachments.length > 0;
   const cwd = session?.cwd || "/workspace";
   const runtimeSubtitle = [currentModel.provider, currentModel.model, `thinking ${thinkingLevel}`, `compact ${autoCompact ? "auto" : "manual"}`].filter(Boolean).join(" · ");
-  const activityStatus = turnActive || session?.status === "working" ? "working" : session?.status === "running" ? "running" : undefined;
+  const isWorking = turnActive || session?.status === "working";
+  const activityStatus = isWorking ? "working" : session?.status === "running" ? "running" : undefined;
 
   const visibleModels = useMemo(() => {
     const query = modelSearch.trim().toLowerCase();
@@ -78,6 +83,7 @@ export function ChatPane({ boxId, sessionId }: { boxId?: string; sessionId?: str
       : models;
     return filtered.slice(0, 180);
   }, [models, modelSearch]);
+  const renderedMessages = useMemo(() => messages.map((m, idx) => <MemoMessageBubble key={m.id} message={m} isLatest={idx === messages.length - 1} />), [messages]);
 
   useEffect(() => {
     if (isNearBottom) bottomRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
@@ -153,7 +159,9 @@ export function ChatPane({ boxId, sessionId }: { boxId?: string; sessionId?: str
         if (delta?.type === "toolcall_start") {
           const tool = toolCallFromDelta(delta);
           const toolCallId = tool.id ?? String(delta.id ?? `${delta.contentIndex ?? "tool"}`);
-          upsertToolMessage(sessionId, toolCallId, { toolCallId, toolName: tool.name ?? "tool", toolArgs: tool.args, toolStatus: "pending" });
+          const patch: Partial<ChatMessage> = { toolCallId, toolName: tool.name ?? "tool", toolStatus: "pending" };
+          if (tool.args !== undefined) patch.toolArgs = tool.args;
+          upsertToolMessage(sessionId, toolCallId, patch);
         }
         if (delta?.type === "toolcall_delta") {
           const tool = toolCallFromDelta(delta);
@@ -165,7 +173,9 @@ export function ChatPane({ boxId, sessionId }: { boxId?: string; sessionId?: str
         if (delta?.type === "toolcall_end") {
           const tool = toolCallFromDelta(delta);
           const toolCallId = tool.id ?? String(delta.id ?? `${delta.contentIndex ?? "tool"}`);
-          upsertToolMessage(sessionId, toolCallId, { toolCallId, toolName: tool.name ?? "tool", toolArgs: tool.args, toolStatus: "pending" });
+          const patch: Partial<ChatMessage> = { toolCallId, toolName: tool.name ?? "tool", toolStatus: "pending" };
+          if (tool.args !== undefined) patch.toolArgs = tool.args;
+          upsertToolMessage(sessionId, toolCallId, patch);
         }
         if (delta?.type === "done" || delta?.type === "error") {
           expectingTurnRef.current = false;
@@ -176,13 +186,19 @@ export function ChatPane({ boxId, sessionId }: { boxId?: string; sessionId?: str
       if (e.type === "tool_execution_start") {
         expectingTurnRef.current = true;
         setTurnActive(true);
-        upsertToolMessage(sessionId, e.toolCallId ?? `${e.toolName}-${Date.now()}`, { toolName: e.toolName, toolArgs: e.args, toolStatus: "running" });
+        const patch: Partial<ChatMessage> = { toolName: e.toolName, toolStatus: "running" };
+        if (e.args !== undefined) patch.toolArgs = e.args;
+        upsertToolMessage(sessionId, e.toolCallId ?? `${e.toolName}-${Date.now()}`, patch);
       }
       if (e.type === "tool_execution_update") {
-        upsertToolMessage(sessionId, e.toolCallId ?? `${e.toolName}-${Date.now()}`, { toolName: e.toolName, toolArgs: e.args, toolResult: resultToText(e.partialResult), toolResultMeta: toolResultMeta(e.partialResult), toolStatus: "running" });
+        const patch: Partial<ChatMessage> = { toolName: e.toolName, toolResult: resultToText(e.partialResult), toolResultMeta: toolResultMeta(e.partialResult), toolStatus: "running" };
+        if (e.args !== undefined) patch.toolArgs = e.args;
+        upsertToolMessage(sessionId, e.toolCallId ?? `${e.toolName}-${Date.now()}`, patch);
       }
       if (e.type === "tool_execution_end") {
-        upsertToolMessage(sessionId, e.toolCallId ?? `${e.toolName}-${Date.now()}`, { toolName: e.toolName, toolArgs: e.args, toolResult: resultToText(e.result), toolResultMeta: toolResultMeta(e.result), toolStatus: e.isError ? "error" : "done" });
+        const patch: Partial<ChatMessage> = { toolName: e.toolName, toolResult: resultToText(e.result), toolResultMeta: toolResultMeta(e.result), toolStatus: e.isError ? "error" : "done" };
+        if (e.args !== undefined) patch.toolArgs = e.args;
+        upsertToolMessage(sessionId, e.toolCallId ?? `${e.toolName}-${Date.now()}`, patch);
       }
       if (e.type === "queue_update") {
         setQueue({ steering: e.steering ?? [], followUp: e.followUp ?? [] });
@@ -209,19 +225,52 @@ export function ChatPane({ boxId, sessionId }: { boxId?: string; sessionId?: str
 
   async function submit(e?: FormEvent, modeOverride?: SendMode) {
     e?.preventDefault();
-    if (!sessionId || !canSend) return;
+    if (!sessionId || !boxId || !canSend) return;
     const message = text.trimEnd();
-    appendMessage(sessionId, { id: newId(), role: "user", text: message || `[${images.length} 张图片]`, timestamp: Date.now() });
-    setText("");
-    expectingTurnRef.current = true;
-    setTurnActive(true);
-    patchSessionLocal({ status: "working" as AgentSessionRecord["status"] });
+    const attachments: ChatAttachment[] = [
+      ...images.map((img) => ({ kind: "image" as const, name: img.name, mimeType: img.mimeType, data: img.data, path: img.path, size: img.size })),
+      ...fileAttachments
+    ];
+    const displayMessage = message || attachmentSummary(attachments);
+    let expanded: ExpandedFileRefs;
+    try {
+      expanded = await expandFileReferencesForPrompt(boxId, cwd, displayMessage);
+    } catch (err) {
+      appendMessage(sessionId, { id: newId(), role: "system", text: `读取 @文件引用失败：${err instanceof Error ? err.message : String(err)}`, timestamp: Date.now() });
+      return;
+    }
     const modeToUse = modeOverride ?? sendMode;
-    const payload: any = { message, images: images.map(({ name: _name, ...img }) => img) };
+    const activeAtSubmit = isWorking;
+    const extraImages = images
+      .filter((img) => !img.path || !expanded.referencedPaths.has(img.path))
+      .map(({ name: _name, path: _path, size: _size, ...img }) => img);
+    const payload: any = { message: expanded.message, images: [...expanded.images, ...extraImages] };
     if (modeToUse !== "normal") payload.streamingBehavior = modeToUse;
-    setImages([]);
-    try { await api.prompt(sessionId, payload); }
-    catch (err) {
+    try {
+      if (activeAtSubmit && modeToUse === "normal") {
+        await api.abortSession(sessionId);
+        expectingTurnRef.current = false;
+        setTurnActive(false);
+        patchSessionLocal({ status: "running" as AgentSessionRecord["status"] });
+      }
+      appendMessage(sessionId, { id: newId(), role: "user", text: displayMessage, attachments, timestamp: Date.now() });
+      setText("");
+      setImages([]);
+      setFileAttachments([]);
+      expectingTurnRef.current = true;
+      setTurnActive(true);
+      patchSessionLocal({ status: "working" as AgentSessionRecord["status"] });
+      try {
+        await api.prompt(sessionId, payload);
+      } catch (err) {
+        if (modeToUse === "normal" && isAlreadyProcessingError(err)) {
+          await api.abortSession(sessionId);
+          await api.prompt(sessionId, payload);
+        } else {
+          throw err;
+        }
+      }
+    } catch (err) {
       expectingTurnRef.current = false;
       setTurnActive(false);
       appendMessage(sessionId, { id: newId(), role: "system", text: `发送失败：${err instanceof Error ? err.message : String(err)}`, timestamp: Date.now() });
@@ -233,6 +282,7 @@ export function ChatPane({ boxId, sessionId }: { boxId?: string; sessionId?: str
     appendMessage(sessionId, { id: newId(), role: "system", text: customInstructions ? `已触发手动上下文压缩。自定义要求：${customInstructions}` : "已触发手动上下文压缩。", timestamp: Date.now() });
     setText("");
     setImages([]);
+    setFileAttachments([]);
     expectingTurnRef.current = true;
     setTurnActive(true);
     patchSessionLocal({ status: "working" as AgentSessionRecord["status"] });
@@ -385,18 +435,24 @@ export function ChatPane({ boxId, sessionId }: { boxId?: string; sessionId?: str
   async function handleAttachmentFiles(input: Iterable<File> | FileList | null | undefined) {
     const files = [...(input ?? [])].filter((file) => file.size >= 0);
     if (!files.length) return;
+    if (!boxId) {
+      if (sessionId) appendMessage(sessionId, { id: newId(), role: "system", text: "上传附件失败：请先选择 Box。", timestamp: Date.now() });
+      return;
+    }
     const imageFiles = files.filter((file) => file.type.startsWith("image/"));
     const otherFiles = files.filter((file) => !file.type.startsWith("image/"));
     setUploadingFiles(true);
     try {
+      const uploaded = await uploadFilesToAttachmentDir(boxId, files);
       if (imageFiles.length) {
-        const converted = await filesToImages(imageFiles);
+        const converted = await filesToImages(imageFiles, uploaded);
         setImages((prev) => [...prev, ...converted]);
       }
-      if (boxId && otherFiles.length) {
-        for (const file of otherFiles) await api.uploadFile(boxId, ".", file);
-        setText((t) => `${t}${t ? "\n" : ""}我已上传文件到 /workspace：${otherFiles.map((file) => file.name).join(", ")}，请根据需要读取。`);
+      if (otherFiles.length) {
+        setFileAttachments((prev) => [...prev, ...otherFiles.map((file) => ({ kind: "file" as const, name: file.name, path: uploaded.get(file)?.path ?? uploadedPathForName(file.name), size: file.size, mimeType: file.type || undefined }))]);
       }
+      const refs = files.map((file) => fileRef(uploaded.get(file)?.path ?? uploadedPathForName(file.name))).join(" ");
+      setText((t) => `${t}${t ? "\n" : ""}请读取附件：${refs}`);
     } catch (err) {
       if (sessionId) appendMessage(sessionId, { id: newId(), role: "system", text: `上传附件失败：${err instanceof Error ? err.message : String(err)}`, timestamp: Date.now() });
     } finally {
@@ -437,7 +493,7 @@ export function ChatPane({ boxId, sessionId }: { boxId?: string; sessionId?: str
   if (!sessionId) return <EmptyChat title="选择或创建 Session" subtitle="Session 负责和 Box 内的 pi RPC agent 对话；可以为同一个 Box 并行开多个会话。" />;
 
   return <div className={`chat surface-tonal ${dragActive ? "drag-active" : ""}`} onDragEnter={handleDragEnter} onDragOver={handleDragOver} onDragLeave={handleDragLeave} onDrop={handleDrop}>
-    {dragActive && <div className="drop-overlay"><Paperclip size={28} /><strong>拖放文件到这里</strong><span>图片会作为消息附件；其它文件会上传到 /workspace</span></div>}
+    {dragActive && <div className="drop-overlay"><Paperclip size={28} /><strong>拖放文件到这里</strong><span>附件会上传到 /workspace/.upload，并以 @file 方式发送</span></div>}
     <div className="chat-topbar">
       <div className="chat-title-block">
         <div className="chat-title"><Sparkles size={18} /> {session?.name ?? "Session"}</div>
@@ -461,7 +517,7 @@ export function ChatPane({ boxId, sessionId }: { boxId?: string; sessionId?: str
           <button type="button" onClick={() => setText("请帮我实现一个小改动，并说明测试方式。")}>实现改动</button>
         </div>
       </div>}
-      {messages.map((m, idx) => <MessageBubble key={m.id} message={m} isLatest={idx === messages.length - 1} />)}
+      {renderedMessages}
       {turnActive && <div className="assistant-thinking"><Loader2 size={14} className="spin" /> pi 正在处理…</div>}
       <div ref={bottomRef} />
     </div>
@@ -471,15 +527,12 @@ export function ChatPane({ boxId, sessionId }: { boxId?: string; sessionId?: str
         {queue.steering.map((item, i) => <span key={`s-${i}`} className="queue-chip">Steer · {item}</span>)}
         {queue.followUp.map((item, i) => <span key={`f-${i}`} className="queue-chip">Follow-up · {item}</span>)}
       </div>}
-      {(images.length > 0 || uploadingFiles) && <div className="attachment-strip">
-        {images.map((img) => <div className="image-chip" key={img.name}><img src={`data:${img.mimeType};base64,${img.data}`} alt="" /><span>{img.name}</span></div>)}
-        {uploadingFiles && <span className="queue-chip"><Loader2 size={13} className="spin" /> 正在处理附件…</span>}
-      </div>}
+      <ComposerAttachmentStrip images={images} fileAttachments={fileAttachments} uploadingFiles={uploadingFiles} setImages={setImages} setFileAttachments={setFileAttachments} />
       <textarea
         value={text}
         onChange={(e) => setText(e.target.value)}
         placeholder="Message BoxedAgent…"
-        onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); void submit(); } }}
+        onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); if (isWorking && canSend) setOpenMenu("send"); else void submit(); } }}
       />
       <div className="composer-toolbar">
         <div className="composer-tools">
@@ -529,13 +582,13 @@ export function ChatPane({ boxId, sessionId }: { boxId?: string; sessionId?: str
         </div>
 
         <div className="send-cluster">
-          <span className="send-mode-label">{turnActive ? "停止生成" : SEND_MODES.find((item) => item.value === sendMode)?.label}</span>
+          <span className="send-mode-label">{isWorking ? (canSend ? "选择发送方式" : "停止生成") : SEND_MODES.find((item) => item.value === sendMode)?.label}</span>
           <div className="send-menu-anchor">
-            {turnActive ? <button type="button" className="send-fab stop-fab" title="中止当前任务" onClick={abortTurn}><Square size={19} /></button> : <>
-              <button type="button" className={`send-fab ${canSend ? "" : "idle"}`} title="发送 / 队列" onClick={() => toggleMenu("send")}><Send size={20} /></button>
+            {isWorking && !canSend ? <button type="button" className="send-fab stop-fab" title="中止当前任务" onClick={abortTurn}><Square size={19} /></button> : <>
+              <button type="button" className={`send-fab ${canSend ? "" : "idle"}`} title={isWorking ? "选择发送方式" : "发送 / 队列"} onClick={() => toggleMenu("send")}><Send size={20} /></button>
               {openMenu === "send" && <MenuPanel className="send-menu">
-                <MenuTitle icon={<Send size={15} />} title="发送方式" subtitle="选择后立即发送；Enter 使用当前方式" />
-                {SEND_MODES.map((item) => <MenuItem key={item.value} selected={sendMode === item.value} onClick={() => chooseSendMode(item.value)} title={item.label} description={item.description} />)}
+                <MenuTitle icon={<Send size={15} />} title="发送方式" subtitle={isWorking ? "当前 agent 正在处理：立即发送会先中断当前 turn；Steer / Follow-up 会加入队列。" : "选择后立即发送；Enter 使用当前方式"} />
+                {SEND_MODES.map((item) => <MenuItem key={item.value} selected={sendMode === item.value} onClick={() => chooseSendMode(item.value)} title={item.label} description={isWorking && item.value === "normal" ? "中断当前 turn，然后立即发送这条消息" : item.description} />)}
               </MenuPanel>}
             </>}
           </div>
@@ -581,9 +634,55 @@ function MessageBubble({ message, isLatest }: { message: ChatMessage; isLatest: 
     {message.role === "assistant" && <div className="avatar assistant-avatar"><Sparkles size={16} /></div>}
     <div className={`message ${message.role}`}>
       {message.thinking && <ThinkingBlock text={message.thinking} autoOpen={isLatest} />}
-      {message.text ? <MarkdownText text={message.text} /> : message.thinking ? null : <span className="muted">…</span>}
+      {message.text ? message.role === "user" ? <UserMessageText text={message.text} /> : <MarkdownText text={message.text} /> : message.thinking ? null : <span className="muted">…</span>}
+      {message.attachments?.length ? <AttachmentGallery attachments={message.attachments} /> : null}
     </div>
   </article>;
+}
+
+const MemoMessageBubble = memo(MessageBubble);
+
+function UserMessageText({ text }: { text: string }) {
+  const parts = splitFileRefs(text);
+  return <div className="user-message-text">{parts.map((part, idx) => {
+    if (part.kind === "newline") return <br key={idx} />;
+    if (part.kind === "fileRef") return <span key={idx} className="file-ref-token" title={part.path}>@{part.path}</span>;
+    return <span key={idx}>{part.text}</span>;
+  })}</div>;
+}
+
+const ComposerAttachmentStrip = memo(function ComposerAttachmentStrip({ images, fileAttachments, uploadingFiles, setImages, setFileAttachments }: {
+  images: Array<{ type: "image"; data: string; mimeType: string; name: string; path?: string; size?: number }>;
+  fileAttachments: Array<{ kind: "file"; name: string; path: string; size?: number; mimeType?: string }>;
+  uploadingFiles: boolean;
+  setImages: Dispatch<SetStateAction<Array<{ type: "image"; data: string; mimeType: string; name: string; path?: string; size?: number }>>>;
+  setFileAttachments: Dispatch<SetStateAction<Array<{ kind: "file"; name: string; path: string; size?: number; mimeType?: string }>>>;
+}) {
+  if (images.length === 0 && fileAttachments.length === 0 && !uploadingFiles) return null;
+  return <div className="attachment-strip">
+    {images.map((img, idx) => <button type="button" className="image-chip attachment-chip-button" key={`${img.name}-${idx}`} title={img.path ? `点击移除附件 · ${img.path}` : "点击移除附件"} onClick={() => setImages((prev) => prev.filter((_, i) => i !== idx))}><img src={`data:${img.mimeType};base64,${img.data}`} alt="" /><span>{img.name}</span>{img.path && <small>@</small>}</button>)}
+    {fileAttachments.map((file, idx) => <button type="button" className="file-chip attachment-chip-button" key={`${file.path}-${idx}`} title="点击移除附件" onClick={() => setFileAttachments((prev) => prev.filter((_, i) => i !== idx))}><Paperclip size={14} /><span>{file.name}</span><small>{file.size ? formatBytes(file.size) : file.path}</small></button>)}
+    {uploadingFiles && <span className="queue-chip"><Loader2 size={13} className="spin" /> 正在处理附件…</span>}
+  </div>;
+});
+
+function AttachmentGallery({ attachments }: { attachments: ChatAttachment[] }) {
+  const images = attachments.filter((item): item is Extract<ChatAttachment, { kind: "image" }> => item.kind === "image");
+  const files = attachments.filter((item): item is Extract<ChatAttachment, { kind: "file" }> => item.kind === "file");
+  return <div className="message-attachments">
+    {images.length > 0 && <div className="message-image-grid">
+      {images.map((img, idx) => <a key={`${img.name}-${idx}`} className="message-image-link" href={`data:${img.mimeType};base64,${img.data}`} target="_blank" rel="noreferrer" title={img.path ? `${img.name} · ${img.path}` : img.name}>
+        <img src={`data:${img.mimeType};base64,${img.data}`} alt={img.name} />
+        <span>{img.name}{img.path ? ` · ${img.path}` : ""}</span>
+      </a>)}
+    </div>}
+    {files.length > 0 && <div className="message-file-list">
+      {files.map((file, idx) => <div className="message-file-card" key={`${file.path}-${idx}`} title={file.path}>
+        <Paperclip size={15} />
+        <div><strong>{file.name}</strong><small>{file.path}{file.size ? ` · ${formatBytes(file.size)}` : ""}</small></div>
+      </div>)}
+    </div>}
+  </div>;
 }
 
 function ThinkingBlock({ text, autoOpen }: { text: string; autoOpen: boolean }) {
@@ -619,8 +718,19 @@ function toolOverview(message: ChatMessage): string {
   if (name === "write") return compactText(["写入", path, previewText(args.content ?? result)]);
   if (name === "edit") return compactText(["编辑", path, previewText(args.newText ?? args.new_text ?? args.replacement ?? result)]);
   if (name === "read") return compactText(["读取", path, args.limit ? `limit ${String(args.limit)}` : previewText(result)]);
-  if (name === "bash" || name === "shell") return compactText([previewText(args.command ?? args.cmd ?? message.toolArgs)]);
-  return compactText([path, previewText(result || message.toolArgs)]);
+  if (name === "bash" || name === "shell") {
+    const command = bashCommand(message.toolArgs);
+    return command ? `$ ${previewText(command, 180)}` : compactText(["bash", previewText(message.toolArgs ?? result)]);
+  }
+  return compactText([path, previewText(message.toolArgs), previewText(result)]);
+}
+
+function bashCommand(toolArgs: unknown): string {
+  const args = asRecord(toolArgs);
+  const direct = stringValue(args.command ?? args.cmd ?? args.script ?? args.value);
+  if (direct) return direct;
+  if (typeof toolArgs === "string") return toolArgs;
+  return "";
 }
 
 function ToolPreview({ message }: { message: ChatMessage }) {
@@ -651,9 +761,9 @@ function ToolPreview({ message }: { message: ChatMessage }) {
   }
 
   if (name === "bash" || name === "shell") {
-    const command = stringValue(args.command ?? args.cmd ?? message.toolArgs);
+    const command = bashCommand(message.toolArgs);
     return <div className="tool-preview">
-      {command && <><div className="tool-preview-head"><span>命令</span></div><CodePreview text={command} maxLines={8} /></>}
+      {command && <><div className="tool-preview-head"><span>模型执行的命令</span></div><CommandPreview command={command} /></>}
       {result && <><div className="tool-preview-head"><span>输出预览</span></div><CodePreview text={result} meta={meta} /></>}
     </div>;
   }
@@ -674,6 +784,13 @@ function DiffPreview({ lines, maxLines = 240 }: { lines: DiffLine[]; maxLines?: 
       {visible.map((line, idx) => <div key={idx} className={`diff-line ${line.type}`}><span className="diff-sign">{line.type === "add" ? "+" : line.type === "del" ? "-" : line.type === "meta" ? "" : " "}</span><span className="diff-text">{line.text || " "}</span></div>)}
       {clipped && <div className="diff-line meta"><span className="diff-sign" /><span className="diff-text">… 还有 {lines.length - maxLines} 行 diff 未展开，共 {lines.length} 行</span></div>}
     </div>
+  </div>;
+}
+
+function CommandPreview({ command }: { command: string }) {
+  return <div className="code-preview-shell command-preview-shell">
+    <div className="code-preview-toolbar"><span>$ command</span><CopyButton text={command} /></div>
+    <pre className="code-preview command-preview">{command}</pre>
   </div>;
 }
 
@@ -744,22 +861,25 @@ function hasDraggedFiles(event: DragEvent<HTMLElement>) {
   return Array.from(event.dataTransfer?.types ?? []).includes("Files");
 }
 
-async function filesToImages(files: Iterable<File> | null) {
+async function filesToImages(files: Iterable<File> | null, uploaded?: Map<File, { path: string }>) {
   if (!files) return [];
   return Promise.all([...files].map(async (file) => {
     const dataUrl = await new Promise<string>((resolve, reject) => { const r = new FileReader(); r.onload = () => resolve(String(r.result)); r.onerror = reject; r.readAsDataURL(file); });
     const data = dataUrl.split(",")[1] ?? "";
-    return { type: "image" as const, data, mimeType: file.type || "image/png", name: file.name };
+    return { type: "image" as const, data, mimeType: file.type || "image/png", name: file.name, path: uploaded?.get(file)?.path, size: file.size };
   }));
 }
 
 function normalizePiMessages(messages: any[]): ChatMessage[] {
-  const toolCalls = new Map<string, Partial<ChatMessage>>();
+  const toolCalls = new Map<string, { tool: Partial<ChatMessage>; outIndex?: number }>();
   const out: ChatMessage[] = [];
   messages.forEach((m, idx) => {
     const timestamp = m.timestamp ?? Date.now();
     if (m.role === "user") {
-      out.push({ id: `${idx}-${timestamp}`, role: "user", text: contentToText(m.content) || m.message || "", timestamp });
+      const imageAttachments = attachmentsFromContent(m.content);
+      const expanded = extractInlineFileBlocks(contentToText(m.content) || m.message || "");
+      const attachments = [...imageAttachments, ...expanded.attachments];
+      out.push({ id: `${idx}-${timestamp}`, role: "user", text: expanded.text || attachmentSummary(attachments), attachments, timestamp });
       return;
     }
     if (m.role === "assistant") {
@@ -767,14 +887,16 @@ function normalizePiMessages(messages: any[]): ChatMessage[] {
       const summary = m.summary ? `[summary]\n${m.summary}` : "";
       if (text || thinking || summary) out.push({ id: `${idx}-${timestamp}-assistant`, role: "assistant", text: text || summary, thinking, timestamp });
       tools.forEach((tool, toolIdx) => {
-        if (tool.toolCallId) toolCalls.set(String(tool.toolCallId), tool);
-        out.push({ id: `${idx}-${timestamp}-tool-${toolIdx}`, role: "tool", text: "", timestamp, ...tool });
+        const toolMessage: ChatMessage = { id: `${idx}-${timestamp}-tool-${toolIdx}`, role: "tool", text: "", timestamp, ...tool };
+        out.push(toolMessage);
+        if (tool.toolCallId) toolCalls.set(String(tool.toolCallId), { tool, outIndex: out.length - 1 });
       });
       return;
     }
     const callId = String(m.tool_call_id ?? m.toolCallId ?? m.id ?? `${idx}-${timestamp}`);
-    const prior = toolCalls.get(callId) ?? {};
-    out.push({
+    const priorEntry = toolCalls.get(callId);
+    const prior = priorEntry?.tool ?? {};
+    const toolMessage: ChatMessage = {
       id: `${idx}-${timestamp}`,
       role: "tool",
       text: "",
@@ -785,7 +907,12 @@ function normalizePiMessages(messages: any[]): ChatMessage[] {
       toolResult: contentToText(m.content) || resultToText(m.result) || JSON.stringify(m),
       toolResultMeta: toolResultMeta(m.result ?? m.content),
       timestamp
-    });
+    };
+    if (priorEntry?.outIndex !== undefined) {
+      out[priorEntry.outIndex] = { ...out[priorEntry.outIndex], ...toolMessage, id: out[priorEntry.outIndex].id };
+      return;
+    }
+    out.push(toolMessage);
   });
   return out;
 }
@@ -799,6 +926,7 @@ function contentParts(content: any): { text: string; thinking: string; tools: Pa
   for (const part of content) {
     if (!part) continue;
     if (typeof part === "string") text.push(part);
+    else if (isImageContentPart(part)) continue;
     else if (part.type === "thinking" || part.thinking) thinking.push(String(part.thinking ?? part.text ?? ""));
     else if (isToolContentPart(part)) tools.push({
       toolCallId: part.id ?? part.toolCallId ?? part.tool_call_id,
@@ -809,6 +937,34 @@ function contentParts(content: any): { text: string; thinking: string; tools: Pa
     else if (part.type === "text" || part.text) text.push(String(part.text ?? ""));
   }
   return { text: text.filter(Boolean).join("\n\n"), thinking: thinking.filter(Boolean).join("\n\n"), tools };
+}
+
+function attachmentsFromContent(content: any): ChatAttachment[] {
+  if (!Array.isArray(content)) return [];
+  const out: ChatAttachment[] = [];
+  content.forEach((part, idx) => {
+    if (!isImageContentPart(part)) return;
+    const data = String(part.data ?? part.imageData ?? part.source?.data ?? "");
+    const mimeType = String(part.mimeType ?? part.mediaType ?? part.source?.media_type ?? "image/png");
+    if (!data) return;
+    out.push({ kind: "image", name: part.name ?? `image-${idx + 1}`, mimeType, data: data.replace(/^data:[^,]+,/, "") });
+  });
+  return out;
+}
+
+function extractInlineFileBlocks(text: string): { text: string; attachments: ChatAttachment[] } {
+  const attachments: ChatAttachment[] = [];
+  const stripped = text.replace(/<file\s+name=["']([^"']+)["']>[\s\S]*?<\/file>\n?/g, (_all, filePath: string) => {
+    const path = String(filePath);
+    attachments.push({ kind: "file", name: path.split("/").filter(Boolean).pop() ?? path, path });
+    return "";
+  }).trimStart();
+  return { text: stripped, attachments };
+}
+
+function isImageContentPart(part: any): boolean {
+  const type = String(part?.type ?? "").toLowerCase();
+  return type === "image" || type === "image_url" || type === "input_image" || Boolean(part?.imageData || part?.mimeType?.startsWith?.("image/") || part?.source?.type === "base64");
 }
 
 function contentToText(content: any): string {
@@ -987,9 +1143,158 @@ function previewText(value: unknown, max = 90): string {
   return text.length > max ? `${text.slice(0, max - 1)}…` : text;
 }
 
+async function uploadFilesToAttachmentDir(boxId: string, files: File[]): Promise<Map<File, { path: string }>> {
+  const uploaded = new Map<File, { path: string }>();
+  for (const file of files) {
+    await api.uploadFile(boxId, ATTACHMENT_UPLOAD_DIR, file);
+    uploaded.set(file, { path: uploadedPathForName(file.name) });
+  }
+  return uploaded;
+}
+
+function uploadedPathForName(name: string) {
+  return `${ATTACHMENT_UPLOAD_ABS_DIR}/${name}`;
+}
+
+function fileRef(path: string) {
+  return /\s/.test(path) ? `@"${path.replace(/(["\\])/g, "\\$1")}"` : `@${path}`;
+}
+
+type ParsedFileRef = { raw: string; path: string; start: number; end: number };
+type ExpandedFileRefs = { message: string; images: Array<{ type: "image"; data: string; mimeType: string }>; referencedPaths: Set<string> };
+
+async function expandFileReferencesForPrompt(boxId: string, cwd: string, message: string): Promise<ExpandedFileRefs> {
+  const refs = parseFileRefs(message);
+  if (!refs.length) return { message, images: [], referencedPaths: new Set() };
+  const seen = new Set<string>();
+  const images: Array<{ type: "image"; data: string; mimeType: string }> = [];
+  let fileText = "";
+  for (const ref of refs) {
+    const resolved = resolveWorkspaceReference(ref.path, cwd);
+    if (seen.has(resolved.absPath)) continue;
+    seen.add(resolved.absPath);
+    const file = await fetchWorkspaceFile(boxId, resolved);
+    if (file.isImage) {
+      images.push({ type: "image", data: file.data, mimeType: file.mimeType });
+      fileText += `<file name="${resolved.absPath}"></file>\n`;
+    } else {
+      fileText += `<file name="${resolved.absPath}">\n${file.text}\n</file>\n`;
+    }
+  }
+  return { message: `${fileText}${message}`, images, referencedPaths: seen };
+}
+
+function parseFileRefs(text: string): ParsedFileRef[] {
+  const refs: ParsedFileRef[] = [];
+  const re = /(^|\s)@(?:("((?:\\.|[^"\\])+)"|'([^']+)'|([^\s]+)))/g;
+  let match: RegExpExecArray | null;
+  while ((match = re.exec(text))) {
+    const prefix = match[1] ?? "";
+    const tokenStart = match.index + prefix.length;
+    const quoted = match[3] ? unescapeQuotedRef(match[3]) : match[4] ?? "";
+    let rawPath = quoted || match[5] || "";
+    let end = re.lastIndex;
+    if (!quoted) {
+      const stripped = rawPath.replace(/[),.;:!?，。；：！？]+$/g, "");
+      end -= rawPath.length - stripped.length;
+      rawPath = stripped;
+    }
+    rawPath = rawPath.trim();
+    if (!rawPath || rawPath.startsWith("@")) continue;
+    refs.push({ raw: text.slice(tokenStart, end), path: rawPath, start: tokenStart, end });
+  }
+  return refs;
+}
+
+function unescapeQuotedRef(value: string) {
+  return value.replace(/\\(["\\])/g, "$1");
+}
+
+function splitFileRefs(text: string): Array<{ kind: "text"; text: string } | { kind: "newline" } | { kind: "fileRef"; path: string }> {
+  const out: Array<{ kind: "text"; text: string } | { kind: "newline" } | { kind: "fileRef"; path: string }> = [];
+  const refs = parseFileRefs(text);
+  let last = 0;
+  const pushText = (value: string) => {
+    const chunks = value.split("\n");
+    chunks.forEach((chunk, idx) => {
+      if (idx > 0) out.push({ kind: "newline" });
+      if (chunk) out.push({ kind: "text", text: chunk });
+    });
+  };
+  for (const ref of refs) {
+    if (ref.start > last) pushText(text.slice(last, ref.start));
+    out.push({ kind: "fileRef", path: ref.path });
+    last = ref.end;
+  }
+  if (last < text.length) pushText(text.slice(last));
+  return out;
+}
+
+function resolveWorkspaceReference(input: string, cwd: string): { absPath: string; relPath: string } {
+  const base = normalizeWorkspacePath(cwd || "/workspace");
+  const raw = input.trim();
+  const absPath = raw.startsWith("/") ? normalizeWorkspacePath(raw) : normalizeWorkspacePath(`${base}/${raw}`);
+  if (absPath !== "/workspace" && !absPath.startsWith("/workspace/")) throw new Error(`文件路径必须位于 /workspace 内：${input}`);
+  return { absPath, relPath: absPath === "/workspace" ? "." : absPath.slice("/workspace/".length) };
+}
+
+function normalizeWorkspacePath(value: string): string {
+  const parts: string[] = [];
+  for (const segment of value.replace(/\\/g, "/").split("/")) {
+    if (!segment || segment === ".") continue;
+    if (segment === "..") parts.pop();
+    else parts.push(segment);
+  }
+  return `/${parts.join("/")}`.replace(/\/$/, "") || "/workspace";
+}
+
+async function fetchWorkspaceFile(boxId: string, file: { absPath: string; relPath: string }): Promise<{ isImage: true; data: string; mimeType: string } | { isImage: false; text: string; mimeType: string }> {
+  const res = await fetch(api.downloadUrl(boxId, file.relPath), { credentials: "include" });
+  if (!res.ok) throw new Error(`${file.absPath}: ${res.status} ${res.statusText}`);
+  const mimeType = (res.headers.get("content-type") || guessMimeType(file.absPath) || "text/plain").split(";")[0].trim();
+  if (mimeType.startsWith("image/") || isImagePath(file.absPath)) {
+    return { isImage: true, data: arrayBufferToBase64(await res.arrayBuffer()), mimeType: mimeType.startsWith("image/") ? mimeType : guessMimeType(file.absPath) || "image/png" };
+  }
+  return { isImage: false, text: await res.text(), mimeType };
+}
+
+function arrayBufferToBase64(buffer: ArrayBuffer) {
+  const bytes = new Uint8Array(buffer);
+  let binary = "";
+  const chunkSize = 0x8000;
+  for (let i = 0; i < bytes.length; i += chunkSize) binary += String.fromCharCode(...bytes.subarray(i, i + chunkSize));
+  return btoa(binary);
+}
+
+function isImagePath(path: string) {
+  return /\.(png|jpe?g|gif|webp)$/i.test(path);
+}
+
+function guessMimeType(path: string) {
+  const lower = path.toLowerCase();
+  if (lower.endsWith(".png")) return "image/png";
+  if (lower.endsWith(".jpg") || lower.endsWith(".jpeg")) return "image/jpeg";
+  if (lower.endsWith(".gif")) return "image/gif";
+  if (lower.endsWith(".webp")) return "image/webp";
+  if (lower.endsWith(".json")) return "application/json";
+  if (lower.endsWith(".md")) return "text/markdown";
+  return undefined;
+}
+
+function isAlreadyProcessingError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return /Agent is already processing|already processing|streamingBehavior/i.test(message);
+}
+
 function compactText(parts: Array<string | undefined | null | false>): string {
   const text = parts.map((part) => String(part ?? "").trim()).filter(Boolean).join(" · ");
   return text || "点击查看详情";
+}
+
+function attachmentSummary(attachments: ChatAttachment[]) {
+  const imageCount = attachments.filter((item) => item.kind === "image").length;
+  const fileCount = attachments.filter((item) => item.kind === "file").length;
+  return [imageCount ? `${imageCount} 张图片` : "", fileCount ? `${fileCount} 个文件` : ""].filter(Boolean).join("，") || "[附件]";
 }
 
 function lineCount(text: string) {

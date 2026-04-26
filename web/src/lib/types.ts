@@ -110,11 +110,16 @@ export interface ToolResultMeta {
   label?: string;
 }
 
+export type ChatAttachment =
+  | { kind: "image"; name: string; mimeType: string; data: string; path?: string; size?: number }
+  | { kind: "file"; name: string; path: string; size?: number; mimeType?: string };
+
 export interface ChatMessage {
   id: string;
   role: ChatMessageRole;
   text: string;
   timestamp: number;
+  attachments?: ChatAttachment[];
   thinking?: string;
   toolCallId?: string;
   toolName?: string;

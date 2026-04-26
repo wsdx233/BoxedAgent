@@ -19,7 +19,7 @@ import { agentManager } from "./agent/agent-manager.js";
 import { assertProductionAuthConfigured, registerAuth } from "./auth.js";
 
 export async function buildServer() {
-  const app = Fastify({ logger: { level: env.LOG_LEVEL } });
+  const app = Fastify({ logger: { level: env.LOG_LEVEL }, bodyLimit: env.MAX_UPLOAD_MB * 1024 * 1024 });
 
   app.setErrorHandler((error, _req, reply) => {
     const err = error as any;
