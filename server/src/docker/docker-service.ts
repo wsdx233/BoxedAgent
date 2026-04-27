@@ -202,6 +202,10 @@ rel=sys.argv[1]
 target=os.path.abspath(os.path.join(root, rel))
 if not (target == root or target.startswith(root + os.sep)):
     raise SystemExit('path escapes workspace')
+if not os.path.exists(target):
+    raise SystemExit('directory does not exist: ' + target)
+if not os.path.isdir(target):
+    raise SystemExit('not a directory: ' + target)
 items=[]
 for name in sorted(os.listdir(target), key=lambda s: (not os.path.isdir(os.path.join(target,s)), s.lower())):
     p=os.path.join(target,name)

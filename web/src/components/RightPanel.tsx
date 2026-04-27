@@ -17,7 +17,7 @@ export function RightPanel({ box, onRefresh }: { box?: BoxRecord; onRefresh: () 
       <button className={tab === "code" ? "active" : ""} onClick={() => setTab("code")}><Code2 size={15} /> code-server</button>
     </div>
     {tab === "terminal" && <div className="panel terminal-panel"><TerminalPane boxId={boxId} /></div>}
-    {tab === "files" && <FileBrowser boxId={boxId} />}
+    {tab === "files" && <FileBrowser key={boxId ?? "none"} boxId={boxId} />}
     {tab === "pi" && <PiSettingsPane box={box} onSaved={onRefresh} />}
     {tab === "code" && <div className="panel">
       {boxId ? <>

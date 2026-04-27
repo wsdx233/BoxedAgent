@@ -1,6 +1,6 @@
 import { type DragEvent, type MouseEvent, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { ArrowUp, Check, Clipboard, ClipboardPaste, Copy, Download, File, Folder, FolderPlus, Link2, Loader2, MessageSquarePlus, MoreVertical, Pencil, RefreshCw, Scissors, Trash2, Upload, X } from "lucide-react";
+import { ArrowUp, Bookmark, BookmarkPlus, Check, Clipboard, ClipboardPaste, Copy, Download, File, Folder, FolderPlus, Link2, Loader2, MessageSquarePlus, MoreVertical, Pencil, RefreshCw, Scissors, Trash2, Upload, X } from "lucide-react";
 import { api } from "../lib/api";
 import { fileRefForWorkspacePath, insertIntoComposer, workspaceAbsPath } from "../lib/composer-events";
 import type { FileEntry } from "../lib/types";
@@ -25,26 +25,42 @@ export function FileBrowser({ boxId }: { boxId?: string }) {
   const [selectedPath, setSelectedPath] = useState<string>();
   const [menu, setMenu] = useState<FileMenuTarget>();
   const [clipboard, setClipboard] = useState<ClipboardState>();
+  const [bookmarks, setBookmarks] = useState<string[]>(() => boxId ? loadBookmarks(boxId) : []);
   const [renamingPath, setRenamingPath] = useState<string>();
   const [renameValue, setRenameValue] = useState("");
   const fileInputRef = useRef<HTMLInputElement>(null);
   const dragDepthRef = useRef(0);
   const parent = useMemo(() => path === "." || path === "" ? "." : path.split("/").slice(0, -1).join("/") || ".", [path]);
   const breadcrumbs = useMemo(() => breadcrumbParts(path), [path]);
+  const normalizedPath = normalizeRelPath(path);
+  const currentBookmarked = bookmarks.includes(normalizedPath);
 
   async function load(targetPath = path) {
     if (!boxId) return;
+    const normalizedTarget = normalizeRelPath(targetPath);
     setLoading(true); setError(undefined);
     try {
-      setEntries((await api.listFiles(boxId, targetPath)).entries);
+      setEntries((await api.listFiles(boxId, normalizedTarget)).entries);
       setSelectedPath(undefined);
     }
-    catch (e) { setError(e instanceof Error ? e.message : String(e)); }
+    catch (e) {
+      setEntries([]);
+      setSelectedPath(undefined);
+      setError(friendlyFileError(e, normalizedTarget));
+    }
     finally { setLoading(false); }
   }
 
   useEffect(() => { void load(); }, [boxId, path]);
-  useEffect(() => { setClipboard(undefined); setSelectedPath(undefined); setMenu(undefined); }, [boxId]);
+  useEffect(() => {
+    setPath(".");
+    setEntries([]);
+    setError(undefined);
+    setClipboard(undefined);
+    setSelectedPath(undefined);
+    setMenu(undefined);
+    setBookmarks(boxId ? loadBookmarks(boxId) : []);
+  }, [boxId]);
 
   async function createDirectory() {
     if (!boxId) return;
@@ -188,6 +204,31 @@ export function FileBrowser({ boxId }: { boxId?: string }) {
     }
   }
 
+  function saveBookmarkList(next: string[]) {
+    if (!boxId) return;
+    const cleaned = Array.from(new Set(next.map(normalizeRelPath))).sort((a, b) => a.localeCompare(b));
+    setBookmarks(cleaned);
+    saveBookmarks(boxId, cleaned);
+  }
+
+  function addBookmark(targetPath = path) {
+    const normalized = normalizeRelPath(targetPath);
+    if (!bookmarks.includes(normalized)) saveBookmarkList([...bookmarks, normalized]);
+    setMenu(undefined);
+  }
+
+  function removeBookmark(targetPath = path) {
+    const normalized = normalizeRelPath(targetPath);
+    saveBookmarkList(bookmarks.filter((item) => item !== normalized));
+    setMenu(undefined);
+  }
+
+  function toggleBookmark(targetPath = path) {
+    const normalized = normalizeRelPath(targetPath);
+    if (bookmarks.includes(normalized)) removeBookmark(normalized);
+    else addBookmark(normalized);
+  }
+
   async function copyAbsPath(entry?: FileEntry) {
     const absPath = workspaceAbsPath(entry?.path ?? path);
     await navigator.clipboard?.writeText(absPath).catch(() => undefined);
@@ -216,7 +257,9 @@ export function FileBrowser({ boxId }: { boxId?: string }) {
       { label: "新建文件夹", icon: <FolderPlus size={14} />, onClick: () => { setShowNewDir(true); setNewDirName(""); } },
       { label: "粘贴到当前目录", icon: <ClipboardPaste size={14} />, disabled: !canPaste, onClick: () => pasteInto(path) },
       { separator: true, label: "" },
+      { label: currentBookmarked ? "移除当前目录书签" : "收藏当前目录", icon: currentBookmarked ? <Bookmark size={14} /> : <BookmarkPlus size={14} />, onClick: () => toggleBookmark(path) },
       { label: "复制当前路径", icon: <Link2 size={14} />, onClick: () => copyAbsPath() },
+      { label: "返回 /workspace", icon: <Folder size={14} />, disabled: normalizedPath === ".", onClick: () => setPath(".") },
       { label: "刷新", icon: <RefreshCw size={14} />, onClick: () => load() }
     ];
     const isDirectory = target.type === "directory";
@@ -226,6 +269,7 @@ export function FileBrowser({ boxId }: { boxId?: string }) {
         : { label: "下载", icon: <Download size={14} />, onClick: () => downloadEntry(target) },
       { label: "附加到聊天", icon: <MessageSquarePlus size={14} />, disabled: target.type !== "file" || !activeSessionId, onClick: () => attachToChat(target) },
       { label: "复制路径", icon: <Link2 size={14} />, onClick: () => copyAbsPath(target) },
+      ...(isDirectory ? [{ label: bookmarks.includes(normalizeRelPath(target.path)) ? "移除目录书签" : "收藏目录", icon: bookmarks.includes(normalizeRelPath(target.path)) ? <Bookmark size={14} /> : <BookmarkPlus size={14} />, onClick: () => toggleBookmark(target.path) }] : []),
       { separator: true, label: "" },
       { label: "重命名", icon: <Pencil size={14} />, onClick: () => startRename(target) },
       { label: "复制", icon: <Copy size={14} />, onClick: () => { setClipboard({ mode: "copy", boxId: boxId!, entry: target }); setMenu(undefined); } },
@@ -276,6 +320,7 @@ export function FileBrowser({ boxId }: { boxId?: string }) {
       </div>
       <div className="file-explorer-actions">
         <button type="button" className="file-action-icon" title="上级" disabled={path === "."} onClick={() => setPath(parent)}><ArrowUp size={14} /></button>
+        <button type="button" className={`file-action-icon ${currentBookmarked ? "active" : ""}`} title={currentBookmarked ? "移除当前目录书签" : "收藏当前目录"} onClick={() => toggleBookmark(path)}>{currentBookmarked ? <Bookmark size={14} /> : <BookmarkPlus size={14} />}</button>
         <button type="button" className="file-action-icon" title="刷新" onClick={() => load()}><RefreshCw size={14} className={loading ? "spin" : ""} /></button>
         <button type="button" className="file-action-icon" title="上传" disabled={uploading} onClick={() => fileInputRef.current?.click()}>{uploading ? <Loader2 size={14} className="spin" /> : <Upload size={14} />}</button>
         <button type="button" className="file-action-icon" title="新建文件夹" onClick={() => { setShowNewDir(true); setNewDirName(""); }}><FolderPlus size={14} /></button>
@@ -283,6 +328,13 @@ export function FileBrowser({ boxId }: { boxId?: string }) {
       </div>
       <input ref={fileInputRef} type="file" hidden multiple onChange={async (e) => { const files = Array.from(e.currentTarget.files ?? []); e.currentTarget.value = ""; await uploadFiles(files); }} />
     </div>
+
+    {bookmarks.length > 0 && <div className="file-bookmarks">
+      <span>书签</span>
+      {bookmarks.map((bookmark) => <button type="button" key={bookmark} className={normalizeRelPath(bookmark) === normalizedPath ? "active" : ""} title={workspaceAbsPath(bookmark)} onClick={() => setPath(bookmark)}>
+        <Bookmark size={12} /><span>{bookmarkLabel(bookmark)}</span>
+      </button>)}
+    </div>}
 
     {clipboard && <div className="file-clipboard-bar"><span>{clipboard.mode === "cut" ? "剪切" : "复制"}：{workspaceAbsPath(clipboard.entry.path)}</span><button type="button" title="取消" onClick={() => setClipboard(undefined)}><X size={13} /></button></div>}
 
@@ -293,7 +345,7 @@ export function FileBrowser({ boxId }: { boxId?: string }) {
       <button type="button" title="取消" onClick={() => { setShowNewDir(false); setNewDirName(""); }}><X size={13} /></button>
     </div>}
 
-    {error && <div className="file-error small">{error}</div>}
+    {error && <div className="file-error small"><span>{error}</span><button type="button" onClick={() => setPath(".")}>返回 /workspace</button></div>}
     {(loading || busy || uploading) && <div className="file-loading small"><Loader2 size={13} className="spin" /> {uploading ? "上传中…" : busy ? "处理中…" : "加载中…"}</div>}
 
     <div className="file-tree" onContextMenu={(event) => openMenu(event)}>
@@ -340,6 +392,39 @@ function formatSize(n: number) {
   if (n < 1024) return `${n} B`;
   if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
   return `${(n / 1024 / 1024).toFixed(1)} MB`;
+}
+
+function bookmarkKey(boxId: string) {
+  return `boxedagent.fileBookmarks.${boxId}`;
+}
+
+function loadBookmarks(boxId: string): string[] {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(bookmarkKey(boxId)) ?? "[]");
+    return Array.isArray(parsed) ? Array.from(new Set(parsed.map((item) => normalizeRelPath(String(item))))) : [];
+  } catch {
+    return [];
+  }
+}
+
+function saveBookmarks(boxId: string, bookmarks: string[]) {
+  try { localStorage.setItem(bookmarkKey(boxId), JSON.stringify(bookmarks)); }
+  catch { /* ignore localStorage failures */ }
+}
+
+function bookmarkLabel(path: string) {
+  const normalized = normalizeRelPath(path);
+  if (normalized === ".") return "workspace";
+  return normalized.split("/").filter(Boolean).pop() ?? normalized;
+}
+
+function friendlyFileError(error: unknown, relPath: string) {
+  const raw = error instanceof Error ? error.message : String(error);
+  const clean = raw.split("\n").map((line) => line.trim()).filter(Boolean).find((line) => !/^Traceback|^File |^at /.test(line)) ?? raw;
+  if (/directory does not exist|does not exist|No such file|not found|ENOENT|FileNotFound/i.test(raw)) return `目录不存在：${workspaceAbsPath(relPath)}`;
+  if (/not a directory|NotADirectory|ENOTDIR/i.test(raw)) return `不是目录：${workspaceAbsPath(relPath)}`;
+  if (/path escapes workspace|AssertionError|outside workspace/i.test(raw)) return "路径必须位于 /workspace 内。";
+  return clean || `无法访问目录：${workspaceAbsPath(relPath)}`;
 }
 
 function breadcrumbParts(path: string) {
