@@ -58,6 +58,10 @@ export async function registerCodeServerProxy(app: FastifyInstance) {
   }
 
   const proxy = httpProxy.createProxyServer({ ws: true, changeOrigin: true, xfwd: true });
+  app.addHook("onClose", (_instance, done) => {
+    proxy.close();
+    done();
+  });
 
   proxy.on("proxyReq", (proxyReq, req) => {
     const body = (req as any).boxedAgentProxyBody as Buffer | undefined;

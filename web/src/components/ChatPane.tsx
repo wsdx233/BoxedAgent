@@ -112,11 +112,15 @@ export function ChatPane({ boxId, sessionId }: { boxId?: string; sessionId?: str
   const [uploadingFiles, setUploadingFiles] = useState(false);
   const [messagesLoading, setMessagesLoading] = useState(false);
   const messagesRef = useRef<HTMLDivElement>(null);
+  const messagesContentRef = useRef<HTMLDivElement>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const composerRef = useRef<HTMLFormElement>(null);
   const expectingTurnRef = useRef(false);
   const dragDepthRef = useRef(0);
+  const stickToBottomRef = useRef(true);
+  const pinnedScrollRafRef = useRef<number>();
+  const pinnedScrollTimeoutRef = useRef<number>();
   const session = sessions.find((s) => s.id === sessionId);
   const messages = sessionId ? messagesBySession[sessionId] ?? [] : [];
   const canSend = text.trim().length > 0 || images.length > 0 || fileAttachments.length > 0;
@@ -136,8 +140,14 @@ export function ChatPane({ boxId, sessionId }: { boxId?: string; sessionId?: str
   const userProgressNodes = useMemo(() => messages.filter((m) => m.role === "user").map((m, idx) => ({ id: m.id, label: `#${idx + 1}`, text: m.text || attachmentSummary(m.attachments ?? []) })), [messages]);
 
   useEffect(() => {
-    if (isNearBottom) bottomRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
+    if (!isNearBottom && !stickToBottomRef.current) return;
+    schedulePinnedScroll();
   }, [messages.length, messages.at(-1)?.text, messages.at(-1)?.thinking, messages.at(-1)?.toolResult, isNearBottom]);
+
+  useEffect(() => () => {
+    if (pinnedScrollRafRef.current !== undefined) window.cancelAnimationFrame(pinnedScrollRafRef.current);
+    if (pinnedScrollTimeoutRef.current !== undefined) window.clearTimeout(pinnedScrollTimeoutRef.current);
+  }, []);
 
   useEffect(() => {
     let raf = 0;
@@ -154,24 +164,32 @@ export function ChatPane({ boxId, sessionId }: { boxId?: string; sessionId?: str
         return { ...node, position: targetScrollTop / maxScroll };
       }));
       const remaining = scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight;
-      setIsNearBottom(remaining < 180);
+      const nearBottom = remaining < 180;
+      stickToBottomRef.current = nearBottom;
+      setIsNearBottom(nearBottom);
       setScrollProgress(Math.min(1, Math.max(0, scroller.scrollTop / maxScroll)));
     };
     const schedule = () => {
       window.cancelAnimationFrame(raf);
       raf = window.requestAnimationFrame(update);
     };
+    const scheduleAfterResize = () => {
+      if (stickToBottomRef.current) schedulePinnedScroll();
+      schedule();
+    };
     schedule();
     timeout = window.setTimeout(update, 260);
     const scroller = messagesRef.current;
-    const resizeObserver = typeof ResizeObserver !== "undefined" ? new ResizeObserver(schedule) : undefined;
+    const content = messagesContentRef.current;
+    const resizeObserver = typeof ResizeObserver !== "undefined" ? new ResizeObserver(scheduleAfterResize) : undefined;
     if (scroller) resizeObserver?.observe(scroller);
-    window.addEventListener("resize", schedule);
+    if (content) resizeObserver?.observe(content);
+    window.addEventListener("resize", scheduleAfterResize);
     return () => {
       window.cancelAnimationFrame(raf);
       if (timeout !== undefined) window.clearTimeout(timeout);
       resizeObserver?.disconnect();
-      window.removeEventListener("resize", schedule);
+      window.removeEventListener("resize", scheduleAfterResize);
     };
   }, [userProgressNodes, messages.length, messages.at(-1)?.text, messages.at(-1)?.toolResult]);
 
@@ -181,6 +199,7 @@ export function ChatPane({ boxId, sessionId }: { boxId?: string; sessionId?: str
     setModels([]);
     setStats(null);
     setSendMode("normal");
+    stickToBottomRef.current = true;
     if (!sessionId) return;
     const draft = useAppStore.getState().composerDrafts[sessionId];
     if (draft !== undefined) {
@@ -403,29 +422,57 @@ export function ChatPane({ boxId, sessionId }: { boxId?: string; sessionId?: str
     }
   }
 
-  function handleScroll() {
-    const el = messagesRef.current;
-    if (!el) return;
+  function updateScrollFollowState(el: HTMLDivElement) {
     const remaining = el.scrollHeight - el.scrollTop - el.clientHeight;
-    setIsNearBottom(remaining < 180);
+    const nearBottom = remaining < 180;
+    stickToBottomRef.current = nearBottom;
+    setIsNearBottom(nearBottom);
     const maxScroll = Math.max(1, el.scrollHeight - el.clientHeight);
     setScrollProgress(Math.min(1, Math.max(0, el.scrollTop / maxScroll)));
   }
 
+  function handleScroll() {
+    const el = messagesRef.current;
+    if (!el) return;
+    updateScrollFollowState(el);
+  }
+
+  function scrollMessagesToBottom(behavior: ScrollBehavior = "auto") {
+    const el = messagesRef.current;
+    if (!el) return;
+    stickToBottomRef.current = true;
+    if (behavior === "smooth") el.scrollTo({ top: el.scrollHeight, behavior });
+    else el.scrollTop = el.scrollHeight;
+    setIsNearBottom(true);
+    setScrollProgress(1);
+  }
+
+  function schedulePinnedScroll() {
+    stickToBottomRef.current = true;
+    scrollMessagesToBottom("auto");
+    if (pinnedScrollRafRef.current !== undefined) window.cancelAnimationFrame(pinnedScrollRafRef.current);
+    if (pinnedScrollTimeoutRef.current !== undefined) window.clearTimeout(pinnedScrollTimeoutRef.current);
+    pinnedScrollRafRef.current = window.requestAnimationFrame(() => scrollMessagesToBottom("auto"));
+    pinnedScrollTimeoutRef.current = window.setTimeout(() => scrollMessagesToBottom("auto"), 120);
+  }
+
   function scrollToMessage(id: string) {
+    stickToBottomRef.current = false;
     const el = document.getElementById(messageDomId(id));
     el?.scrollIntoView({ behavior: "smooth", block: "start" });
   }
 
   function scrollToBottom() {
-    bottomRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
+    schedulePinnedScroll();
   }
 
   function scrollToProgress(nextProgress: number) {
     const el = messagesRef.current;
     if (!el) return;
+    const progress = clamp01(nextProgress);
+    stickToBottomRef.current = progress > 0.995;
     const maxScroll = Math.max(1, el.scrollHeight - el.clientHeight);
-    el.scrollTo({ top: clamp01(nextProgress) * maxScroll, behavior: "auto" });
+    el.scrollTop = progress * maxScroll;
     handleScroll();
   }
 
@@ -638,20 +685,22 @@ export function ChatPane({ boxId, sessionId }: { boxId?: string; sessionId?: str
     <ChatProgressRail progress={scrollProgress} nodes={progressNodes} showBottomButton={!isNearBottom} onProgressChange={scrollToProgress} onJumpToMessage={scrollToMessage} onJumpBottom={scrollToBottom} />
 
     <div className="messages" ref={messagesRef} onScroll={handleScroll}>
-      {messagesLoading && <div className="session-loading-card"><Loader2 size={18} className="spin" /><strong>正在加载 Session…</strong><span>历史消息会在后台恢复，界面仍可操作。</span></div>}
-      {!messagesLoading && messages.length === 0 && <div className="welcome-card">
-        <div className="welcome-orb"><Sparkles size={24} /></div>
-        <h2>准备好开始了吗？</h2>
-        <p>像 Claude 一样自然地描述任务。BoxedAgent 会把上下文、文件和工具调用整合到这个 Box 内的 pi agent。</p>
-        <div className="prompt-suggestions">
-          <button type="button" onClick={() => setText("请快速了解这个 workspace 的结构，并给我一个简短总结。")}>总结 workspace</button>
-          <button type="button" onClick={() => setText("请运行必要检查，找出当前项目最值得改进的地方。")}>检查项目</button>
-          <button type="button" onClick={() => setText("请帮我实现一个小改动，并说明测试方式。")}>实现改动</button>
-        </div>
-      </div>}
-      {renderedMessages}
-      {turnActive && <div className="assistant-thinking"><Loader2 size={14} className="spin" /> pi 正在处理…</div>}
-      <div ref={bottomRef} />
+      <div className="messages-content" ref={messagesContentRef}>
+        {messagesLoading && <div className="session-loading-card"><Loader2 size={18} className="spin" /><strong>正在加载 Session…</strong><span>历史消息会在后台恢复，界面仍可操作。</span></div>}
+        {!messagesLoading && messages.length === 0 && <div className="welcome-card">
+          <div className="welcome-orb"><Sparkles size={24} /></div>
+          <h2>准备好开始了吗？</h2>
+          <p>像 Claude 一样自然地描述任务。BoxedAgent 会把上下文、文件和工具调用整合到这个 Box 内的 pi agent。</p>
+          <div className="prompt-suggestions">
+            <button type="button" onClick={() => setText("请快速了解这个 workspace 的结构，并给我一个简短总结。")}>总结 workspace</button>
+            <button type="button" onClick={() => setText("请运行必要检查，找出当前项目最值得改进的地方。")}>检查项目</button>
+            <button type="button" onClick={() => setText("请帮我实现一个小改动，并说明测试方式。")}>实现改动</button>
+          </div>
+        </div>}
+        {renderedMessages}
+        {turnActive && <div className="assistant-thinking"><Loader2 size={14} className="spin" /> pi 正在处理…</div>}
+        <div ref={bottomRef} />
+      </div>
     </div>
 
     <form className="composer" ref={composerRef} onSubmit={(e) => submit(e)}>

@@ -244,6 +244,7 @@ hr { border: 0; border-top: 1px solid var(--border); margin: 14px 0; }
 .cwd-chip { direction: rtl; text-align: left; }
 .messages { flex: 1; overflow: auto; padding: 28px clamp(42px, 5vw, 76px) 28px clamp(22px, 5vw, 72px); background: radial-gradient(circle at 50% 0, rgba(208,188,255,.08), transparent 34%); scroll-behavior: smooth; scrollbar-width: none; -ms-overflow-style: none; }
 .messages::-webkit-scrollbar { width: 0; height: 0; display: none; }
+.messages-content { min-height: 100%; }
 .message-anchor-wrap { scroll-margin-top: 92px; }
 .chat-progress-rail { position: absolute; right: 16px; top: max(132px, 24%); bottom: max(172px, 24%); z-index: 25; width: 40px; pointer-events: none; touch-action: none; opacity: .86; transition: opacity .16s ease; }
 .chat-progress-rail:hover, .dragging-progress .chat-progress-rail { opacity: 1; }

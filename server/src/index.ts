@@ -92,15 +92,61 @@ async function main() {
     }
   }
   const app = await buildServer();
-  const shutdown = async () => {
-    app.log.info("shutting down");
-    await agentManager.stopAll();
-    await app.close();
+  let shuttingDown = false;
+  const shutdown = async (signal: NodeJS.Signals) => {
+    if (shuttingDown) {
+      app.log.warn({ signal }, "shutdown already in progress, forcing exit");
+      process.exit(1);
+    }
+    shuttingDown = true;
+    const forceExitTimer = setTimeout(() => {
+      app.log.warn({ signal }, "shutdown timed out, forcing exit");
+      process.exit(1);
+    }, 8_000);
+    forceExitTimer.unref();
+
+    app.log.info({ signal }, "shutting down");
+    closeWebSocketClients(app);
+    closeHttpConnections(app);
+    await settleShutdownStep("agent runtimes", agentManager.stopAll(), app.log);
+    await settleShutdownStep("http server", app.close(), app.log);
+    clearTimeout(forceExitTimer);
     process.exit(0);
   };
-  process.on("SIGINT", shutdown);
-  process.on("SIGTERM", shutdown);
+  process.on("SIGINT", () => void shutdown("SIGINT"));
+  process.on("SIGTERM", () => void shutdown("SIGTERM"));
   await app.listen({ host: env.HOST, port: env.PORT });
+}
+
+async function settleShutdownStep(label: string, promise: Promise<unknown>, log: { warn: (obj: unknown, msg?: string) => void }) {
+  const timeout = new Promise<"timeout">((resolve) => {
+    const timer = setTimeout(() => resolve("timeout"), 3_500);
+    timer.unref();
+  });
+  try {
+    const result = await Promise.race([promise.then(() => "done" as const), timeout]);
+    if (result === "timeout") log.warn({ step: label }, "shutdown step timed out");
+  } catch (error) {
+    log.warn({ err: error, step: label }, "shutdown step failed");
+  }
+}
+
+function closeWebSocketClients(app: { websocketServer?: { clients?: Set<{ close: (code?: number, data?: string) => void; terminate: () => void }> } }) {
+  for (const client of app.websocketServer?.clients ?? []) {
+    try { client.close(1001, "server shutting down"); } catch { /* ignore */ }
+    const timer = setTimeout(() => {
+      try { client.terminate(); } catch { /* ignore */ }
+    }, 1_000);
+    timer.unref();
+  }
+}
+
+function closeHttpConnections(app: { server: { closeIdleConnections?: () => void; closeAllConnections?: () => void } }) {
+  try { app.server.closeIdleConnections?.(); } catch { /* ignore */ }
+  const timer = setTimeout(() => {
+    try { app.server.closeAllConnections?.(); } catch { /* ignore */ }
+  }, 1_000);
+  timer.unref();
 }
 
 function corsOrigin() {
