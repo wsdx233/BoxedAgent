@@ -1,8 +1,51 @@
-import { FormEvent, memo, type Dispatch, type DragEvent, type PointerEvent as ReactPointerEvent, type ReactNode, type SetStateAction, type TouchEvent as ReactTouchEvent, useEffect, useMemo, useRef, useState } from "react";
+import { FormEvent, memo, type Dispatch, type DragEvent, type ElementType, type PointerEvent as ReactPointerEvent, type ReactNode, type SetStateAction, type TouchEvent as ReactTouchEvent, useEffect, useMemo, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import rehypeHighlight from "rehype-highlight";
-import { Archive, Bot, Brain, CheckCircle2, ChevronDown, CircleAlert, Copy, ExternalLink, ImageIcon, Loader2, Paperclip, RefreshCw, Send, Sparkles, Square, Wrench, X } from "lucide-react";
+import { Archive, Bot, Brain, CheckCircle2, ChevronDown, CircleAlert, Copy, ExternalLink, Eye, FilePenLine, FilePlus2, FileSearch, FolderTree, ImageIcon, Loader2, Paperclip, RefreshCw, Search, Send, Sparkles, Square, Terminal, Wrench, X } from "lucide-react";
+import SiApachemaven from "@icons-pack/react-simple-icons/icons/SiApachemaven.mjs";
+import SiAstro from "@icons-pack/react-simple-icons/icons/SiAstro.mjs";
+import SiC from "@icons-pack/react-simple-icons/icons/SiC.mjs";
+import SiCmake from "@icons-pack/react-simple-icons/icons/SiCmake.mjs";
+import SiCplusplus from "@icons-pack/react-simple-icons/icons/SiCplusplus.mjs";
+import SiCss from "@icons-pack/react-simple-icons/icons/SiCss.mjs";
+import SiDart from "@icons-pack/react-simple-icons/icons/SiDart.mjs";
+import SiDocker from "@icons-pack/react-simple-icons/icons/SiDocker.mjs";
+import SiDotenv from "@icons-pack/react-simple-icons/icons/SiDotenv.mjs";
+import SiDotnet from "@icons-pack/react-simple-icons/icons/SiDotnet.mjs";
+import SiElixir from "@icons-pack/react-simple-icons/icons/SiElixir.mjs";
+import SiFishshell from "@icons-pack/react-simple-icons/icons/SiFishshell.mjs";
+import SiGit from "@icons-pack/react-simple-icons/icons/SiGit.mjs";
+import SiGnubash from "@icons-pack/react-simple-icons/icons/SiGnubash.mjs";
+import SiGo from "@icons-pack/react-simple-icons/icons/SiGo.mjs";
+import SiGradle from "@icons-pack/react-simple-icons/icons/SiGradle.mjs";
+import SiGraphql from "@icons-pack/react-simple-icons/icons/SiGraphql.mjs";
+import SiHtml5 from "@icons-pack/react-simple-icons/icons/SiHtml5.mjs";
+import SiJavascript from "@icons-pack/react-simple-icons/icons/SiJavascript.mjs";
+import SiJson from "@icons-pack/react-simple-icons/icons/SiJson.mjs";
+import SiKotlin from "@icons-pack/react-simple-icons/icons/SiKotlin.mjs";
+import SiLua from "@icons-pack/react-simple-icons/icons/SiLua.mjs";
+import SiMake from "@icons-pack/react-simple-icons/icons/SiMake.mjs";
+import SiMarkdown from "@icons-pack/react-simple-icons/icons/SiMarkdown.mjs";
+import SiNodedotjs from "@icons-pack/react-simple-icons/icons/SiNodedotjs.mjs";
+import SiNpm from "@icons-pack/react-simple-icons/icons/SiNpm.mjs";
+import SiOpenjdk from "@icons-pack/react-simple-icons/icons/SiOpenjdk.mjs";
+import SiPhp from "@icons-pack/react-simple-icons/icons/SiPhp.mjs";
+import SiPostgresql from "@icons-pack/react-simple-icons/icons/SiPostgresql.mjs";
+import SiPython from "@icons-pack/react-simple-icons/icons/SiPython.mjs";
+import SiR from "@icons-pack/react-simple-icons/icons/SiR.mjs";
+import SiReact from "@icons-pack/react-simple-icons/icons/SiReact.mjs";
+import SiRuby from "@icons-pack/react-simple-icons/icons/SiRuby.mjs";
+import SiRust from "@icons-pack/react-simple-icons/icons/SiRust.mjs";
+import SiScala from "@icons-pack/react-simple-icons/icons/SiScala.mjs";
+import SiShell from "@icons-pack/react-simple-icons/icons/SiShell.mjs";
+import SiSqlite from "@icons-pack/react-simple-icons/icons/SiSqlite.mjs";
+import SiSvelte from "@icons-pack/react-simple-icons/icons/SiSvelte.mjs";
+import SiSwift from "@icons-pack/react-simple-icons/icons/SiSwift.mjs";
+import SiToml from "@icons-pack/react-simple-icons/icons/SiToml.mjs";
+import SiTypescript from "@icons-pack/react-simple-icons/icons/SiTypescript.mjs";
+import SiVuedotjs from "@icons-pack/react-simple-icons/icons/SiVuedotjs.mjs";
+import SiYaml from "@icons-pack/react-simple-icons/icons/SiYaml.mjs";
 import { api, closeWebSocketQuietly, wsUrl } from "../lib/api";
 import { COMPOSER_INSERT_EVENT, type ComposerInsertDetail } from "../lib/composer-events";
 import { newId } from "../lib/id";
@@ -921,36 +964,161 @@ function ThinkingBlock({ text, autoOpen }: { text: string; autoOpen: boolean }) 
 
 function ToolCard({ message, isLatest }: { message: ChatMessage; isLatest: boolean }) {
   const status = message.toolStatus ?? "pending";
+  const kind = toolKindForName(message.toolName);
   const autoOpen = isLatest || status === "running";
   const [open, setOpen] = useState(autoOpen);
   useEffect(() => setOpen(autoOpen), [autoOpen, message.id]);
   return <details className={`tool-card ${status}`} open={open} onToggle={(e) => setOpen(e.currentTarget.open)}>
     <summary>
-      <span className="tool-icon">{status === "running" ? <Loader2 size={14} className="spin" /> : status === "error" ? <CircleAlert size={14} /> : <CheckCircle2 size={14} />}</span>
-      <span className="tool-name"><Wrench size={14} /> {message.toolName ?? "tool"}</span>
+      <span className={`tool-icon tool-icon-${kind}`} aria-hidden="true">{toolIcon(kind)}</span>
+      <span className="tool-name">{toolLabel(kind, message.toolName)}</span>
       <span className="tool-overview">{toolOverview(message)}</span>
-      <span className="tool-status">{status === "running" ? "运行中" : status === "error" ? "失败" : status === "done" ? "完成" : "准备"}</span>
+      <span className={`tool-status ${status}`} title={`状态：${toolStatusLabel(status)}`} aria-label={`工具调用${toolStatusLabel(status)}`}><span className="tool-status-dot" /></span>
     </summary>
     <ToolPreview message={message} />
   </details>;
 }
 
-function toolOverview(message: ChatMessage): string {
-  const name = (message.toolName ?? "tool").toLowerCase();
+type ToolKind = "read" | "edit" | "write" | "bash" | "ls" | "grep" | "find" | "unknown";
+
+function toolKindForName(name?: string): ToolKind {
+  const raw = String(name ?? "").trim().toLowerCase();
+  const last = raw.split(/[./:]/).filter(Boolean).pop() ?? raw;
+  const keys = [raw, last].map((value) => value.replace(/[\s_-]/g, ""));
+  const has = (...values: string[]) => keys.some((key) => values.includes(key));
+  if (has("read", "readfile", "fileread", "view")) return "read";
+  if (has("edit", "editfile", "fileedit", "replace", "strreplace")) return "edit";
+  if (has("write", "writefile", "filewrite", "create", "createfile")) return "write";
+  if (has("bash", "shell", "terminal", "runcommand", "exec", "execute")) return "bash";
+  if (has("ls", "list", "listdir", "listdirectory")) return "ls";
+  if (has("grep", "rg", "ripgrep", "search", "searchtext")) return "grep";
+  if (has("find", "findfile", "findfiles", "glob")) return "find";
+  return "unknown";
+}
+
+function toolIcon(kind: ToolKind): ReactNode {
+  if (kind === "read") return <Eye size={15} />;
+  if (kind === "edit") return <FilePenLine size={15} />;
+  if (kind === "write") return <FilePlus2 size={15} />;
+  if (kind === "bash") return <Terminal size={15} />;
+  if (kind === "ls") return <FolderTree size={15} />;
+  if (kind === "grep") return <Search size={15} />;
+  if (kind === "find") return <FileSearch size={15} />;
+  return <Wrench size={15} />;
+}
+
+function toolLabel(kind: ToolKind, name?: string): string {
+  if (kind === "read") return "读取文件";
+  if (kind === "edit") return "编辑文件";
+  if (kind === "write") return "写入文件";
+  if (kind === "bash") return "执行命令";
+  if (kind === "ls") return "列出目录";
+  if (kind === "grep") return "搜索文本";
+  if (kind === "find") return "查找文件";
+  return name || "tool";
+}
+
+function toolStatusLabel(status: string): string {
+  if (status === "running") return "运行中";
+  if (status === "error") return "失败";
+  if (status === "done") return "完成";
+  return "准备";
+}
+
+function toolOverview(message: ChatMessage): ReactNode {
+  const kind = toolKindForName(message.toolName);
   const args = asRecord(message.toolArgs);
   const result = message.toolResult ?? "";
-  const path = stringValue(args.path ?? args.file ?? args.filename);
-  if (name === "write") return compactText(["写入", path, previewText(args.content ?? result)]);
-  if (name === "edit") {
+  const meta = enrichToolMeta(message.toolResultMeta ?? toolResultMeta(result), result);
+  const path = toolPathFromArgs(args);
+
+  if (kind === "edit") {
     const edits = editDiffInputs(args, path);
-    return compactText(["编辑", path, edits.length ? previewText(edits[0].newText) : previewText(result)]);
+    const stats = editChangeStats(edits);
+    const paths = uniqueStrings([path, ...edits.map((edit) => edit.path)]);
+    const firstPath = paths[0] || path;
+    return <>
+      {paths.length > 0 && <span className="tool-file-count">{paths.length} files</span>}
+      {edits.length > 0 ? <ToolChangeStats added={stats.added} removed={stats.removed} /> : <span className="tool-muted">{previewText(result) || "等待 diff"}</span>}
+      {firstPath && <ToolFileRef path={firstPath} />}
+      {paths.length > 1 && <span className="tool-extra-count">+{paths.length - 1}</span>}
+      {!paths.length && !edits.length && !result && <span className="tool-muted">点击查看详情</span>}
+    </>;
   }
-  if (name === "read") return compactText(["读取", path, args.limit ? `limit ${String(args.limit)}` : previewText(result)]);
-  if (name === "bash" || name === "shell") {
+
+  if (kind === "read") {
+    const lineSummary = readLineSummary(args, result, meta);
+    return <>
+      {path ? <ToolFileRef path={path} /> : <span className="tool-muted">file</span>}
+      {lineSummary && <span className="tool-line-range">{lineSummary}</span>}
+    </>;
+  }
+
+  if (kind === "write") {
+    const content = stringValue(args.content ?? args.newText ?? args.new_text ?? args.replacement ?? args.text ?? args.value);
+    const added = content ? splitTextLines(content).length : (meta?.shownLines ?? 0);
+    return <>
+      {added > 0 && <ToolChangeStats added={added} removed={0} />}
+      {path ? <ToolFileRef path={path} /> : <span className="tool-muted">{previewText(result) || "file"}</span>}
+    </>;
+  }
+
+  if (kind === "bash") {
     const command = bashCommand(message.toolArgs);
-    return command ? `$ ${previewText(command, 180)}` : compactText(["bash", previewText(message.toolArgs ?? result)]);
+    return command ? <code className="tool-inline-code">$ {previewText(command, 180)}</code> : <span className="tool-muted">{previewText(message.toolArgs ?? result) || "shell"}</span>;
   }
-  return compactText([path, previewText(message.toolArgs), previewText(result)]);
+
+  if (kind === "ls") {
+    return <>{path ? <ToolFileRef path={path} /> : <span className="tool-muted">当前目录</span>}</>;
+  }
+
+  if (kind === "grep" || kind === "find") {
+    const query = stringValue(args.pattern ?? args.query ?? args.regex ?? args.name ?? args.value);
+    return <>
+      {query && <code className="tool-inline-code">{previewText(query, 80)}</code>}
+      {path && <ToolFileRef path={path} />}
+      {!query && !path && <span className="tool-muted">{previewText(message.toolArgs ?? result) || "点击查看详情"}</span>}
+    </>;
+  }
+
+  return compactText([path ? fileNameFromPath(path) : "", previewText(message.toolArgs), previewText(result)]);
+}
+
+function ToolChangeStats({ added, removed }: { added?: number; removed?: number }) {
+  const add = Math.max(0, Math.floor(added ?? 0));
+  const del = Math.max(0, Math.floor(removed ?? 0));
+  if (!add && !del) return <span className="tool-muted">无行变更</span>;
+  return <span className="tool-change-group">
+    {add > 0 && <span className="tool-change add">+{add}</span>}
+    {del > 0 && <span className="tool-change del">-{del}</span>}
+  </span>;
+}
+
+function ToolFileRef({ path }: { path: string }) {
+  const name = fileNameFromPath(path);
+  const badge = fileBadgeForPath(path);
+  return <span className="tool-file-ref" title={`${badge.title} · ${path}`}>
+    <ToolLanguageBadge badge={badge} />
+    <span className="tool-file-name">{name}</span>
+  </span>;
+}
+
+function ToolPathCode({ path, fallback = "file" }: { path?: string; fallback?: string }) {
+  const label = path ? fileNameFromPath(path) : fallback;
+  const badge = fileBadgeForPath(path || label);
+  return <span className="tool-path-pill" title={path || label}>
+    <ToolLanguageBadge badge={badge} />
+    <code>{label}</code>
+  </span>;
+}
+
+type FileBadge = { label: string; className: string; title: string; icon?: ElementType };
+
+function ToolLanguageBadge({ badge }: { badge: FileBadge }) {
+  const Icon = badge.icon;
+  return <span className={`tool-file-badge ${Icon ? "has-icon" : ""} ${badge.className}`} title={badge.title} aria-label={badge.title}>
+    {Icon ? <Icon size={14} color="currentColor" title={badge.title} /> : badge.label}
+  </span>;
 }
 
 function bashCommand(toolArgs: unknown): string {
@@ -962,42 +1130,42 @@ function bashCommand(toolArgs: unknown): string {
 }
 
 function ToolPreview({ message }: { message: ChatMessage }) {
-  const name = (message.toolName ?? "tool").toLowerCase();
+  const kind = toolKindForName(message.toolName);
   const args = asRecord(message.toolArgs);
   const result = message.toolResult ?? "";
   const meta = enrichToolMeta(message.toolResultMeta ?? toolResultMeta(result), result);
-  const path = stringValue(args.path ?? args.file ?? args.filename);
+  const path = toolPathFromArgs(args);
 
-  if (name === "write") {
+  if (kind === "write") {
     const content = stringValue(args.content ?? args.newText ?? args.new_text ?? args.replacement ?? args.text ?? args.value);
     const diffLines = content ? buildWriteDiff(content, path) : [];
     return <div className="tool-preview">
-      <div className="tool-preview-head"><span>写入 diff</span><code>{path || "file"}</code></div>
+      <div className="tool-preview-head"><span>写入 diff</span><ToolPathCode path={path} /></div>
       {diffLines.length > 0 ? <DiffPreview lines={diffLines} /> : result ? <CodePreview text={result} meta={meta} /> : <div className="empty-menu">没有可显示的写入内容</div>}
       {result && content && <details className="tool-mini-details"><summary>工具结果</summary><CodePreview text={result} meta={meta} maxLines={10} /></details>}
     </div>;
   }
 
-  if (name === "edit") {
+  if (kind === "edit") {
     const edits = editDiffInputs(args, path);
     const diffLines = buildEditDiffLines(edits, path);
     return <div className="tool-preview">
-      <div className="tool-preview-head"><span>编辑 diff</span><code>{path || edits[0]?.path || "file"}</code>{edits.length > 1 && <span className="small">{edits.length} blocks</span>}</div>
+      <div className="tool-preview-head"><span>编辑 diff</span><ToolPathCode path={path || edits[0]?.path} />{edits.length > 1 && <span className="small">{edits.length} blocks</span>}</div>
       {diffLines.length > 0 ? <DiffPreview lines={diffLines} /> : result ? <CodePreview text={result} meta={meta} /> : <div className="empty-menu">没有可显示的编辑内容</div>}
       {result && diffLines.length > 0 && <details className="tool-mini-details"><summary>工具结果</summary><CodePreview text={result} meta={meta} maxLines={10} /></details>}
     </div>;
   }
 
-  if (name === "read") {
-    const limit = args.limit ? `limit ${String(args.limit)}` : "";
+  if (kind === "read") {
+    const lineSummary = readLineSummary(args, result, meta);
     const display = result || (message.toolArgs !== undefined ? safeJson(message.toolArgs) : "");
     return <div className="tool-preview">
-      <div className="tool-preview-head"><span>读取</span><code>{path || "file"}</code>{limit && <span className="small">{limit}</span>}</div>
+      <div className="tool-preview-head"><span>读取</span><ToolPathCode path={path} />{lineSummary && <span className="small">{lineSummary}</span>}</div>
       {display && <CodePreview text={display} meta={meta} />}
     </div>;
   }
 
-  if (name === "bash" || name === "shell") {
+  if (kind === "bash") {
     const command = bashCommand(message.toolArgs);
     return <div className="tool-preview">
       {command && <><div className="tool-preview-head"><span>模型执行的命令</span></div><CommandPreview command={command} /></>}
@@ -1019,7 +1187,7 @@ function editDiffInputs(args: Record<string, any>, fallbackPath?: string): EditD
     const record = asRecord(value);
     const oldText = stringValue(record.oldText ?? record.old_text ?? record.old ?? record.original ?? record.before);
     const newText = stringValue(record.newText ?? record.new_text ?? record.replacement ?? record.replace ?? record.new ?? record.after ?? record.text ?? record.value);
-    const path = stringValue(record.path ?? record.file ?? record.filename) || fallbackPath;
+    const path = toolPathFromArgs(record) || fallbackPath;
     if (oldText || newText) out.push({ oldText, newText, path });
   };
   for (const key of ["edits", "changes", "replacements"]) {
@@ -1028,6 +1196,171 @@ function editDiffInputs(args: Record<string, any>, fallbackPath?: string): EditD
   }
   push(args);
   return out.filter((edit, idx, list) => list.findIndex((item) => item.oldText === edit.oldText && item.newText === edit.newText && item.path === edit.path) === idx);
+}
+
+function toolPathFromArgs(args: Record<string, any>): string {
+  return stringValue(args.path ?? args.file ?? args.filename ?? args.filePath ?? args.file_path ?? args.directory ?? args.dir ?? args.cwd);
+}
+
+function uniqueStrings(values: Array<string | undefined | null | false>): string[] {
+  return Array.from(new Set(values.map((value) => String(value ?? "").trim()).filter(Boolean)));
+}
+
+function editChangeStats(edits: EditDiffInput[]): { added: number; removed: number } {
+  return edits.reduce((stats, edit) => {
+    const changed = changedLineCounts(edit.oldText, edit.newText);
+    stats.added += changed.added;
+    stats.removed += changed.removed;
+    return stats;
+  }, { added: 0, removed: 0 });
+}
+
+function changedLineCounts(oldText: string, newText: string): { added: number; removed: number } {
+  if (!oldText && !newText) return { added: 0, removed: 0 };
+  const oldLines = splitTextLines(oldText);
+  const newLines = splitTextLines(newText);
+  if (!oldLines.length) return { added: newLines.length, removed: 0 };
+  if (!newLines.length) return { added: 0, removed: oldLines.length };
+  if (oldLines.length * newLines.length > 90_000) return { added: newLines.length, removed: oldLines.length };
+  let prev = new Uint32Array(newLines.length + 1);
+  let curr = new Uint32Array(newLines.length + 1);
+  for (let i = 1; i <= oldLines.length; i++) {
+    for (let j = 1; j <= newLines.length; j++) {
+      curr[j] = oldLines[i - 1] === newLines[j - 1] ? prev[j - 1] + 1 : Math.max(prev[j], curr[j - 1]);
+    }
+    [prev, curr] = [curr, prev];
+    curr.fill(0);
+  }
+  const common = prev[newLines.length] ?? 0;
+  return { added: newLines.length - common, removed: oldLines.length - common };
+}
+
+function readLineSummary(args: Record<string, any>, result: string, meta?: ToolResultMeta): string {
+  const start = numericValue(args.offset ?? args.start ?? args.startLine ?? args.start_line ?? args.line ?? args.from);
+  const limit = numericValue(args.limit ?? args.lines ?? args.lineCount ?? args.line_count ?? args.count);
+  if (start !== undefined && limit !== undefined) return `第 ${start}-${Math.max(start, start + limit - 1)} 行`;
+  if (start !== undefined) return `第 ${start} 行起`;
+  if (limit !== undefined) return `前 ${limit} 行`;
+  const shown = meta?.shownLines ?? (result ? lineCount(result) : undefined);
+  if (shown && shown > 0) return shown === 1 ? "第 1 行" : `第 1-${shown} 行`;
+  return "";
+}
+
+function numericValue(value: unknown): number | undefined {
+  const num = typeof value === "number" ? value : typeof value === "string" && value.trim() ? Number(value.replace(/,/g, "")) : NaN;
+  return Number.isFinite(num) ? Math.max(1, Math.floor(num)) : undefined;
+}
+
+function fileNameFromPath(path: string): string {
+  const normalized = String(path || "").replace(/\\/g, "/").replace(/\/+$/g, "");
+  return normalized.split("/").filter(Boolean).pop() || normalized || "file";
+}
+
+function fileExtension(name: string): string {
+  const baseName = fileNameFromPath(name).toLowerCase();
+  const dotIndex = baseName.lastIndexOf(".");
+  if (dotIndex <= 0 || dotIndex === baseName.length - 1) return "";
+  return baseName.slice(dotIndex + 1);
+}
+
+const LANGUAGE_BADGES: Record<string, FileBadge> = {
+  js: badge("JS", "lang-js", "JavaScript", SiJavascript),
+  mjs: badge("JS", "lang-js", "JavaScript module", SiJavascript),
+  cjs: badge("JS", "lang-js", "CommonJS", SiJavascript),
+  jsx: badge("JSX", "lang-react", "React JSX", SiReact),
+  ts: badge("TS", "lang-ts", "TypeScript", SiTypescript),
+  mts: badge("TS", "lang-ts", "TypeScript module", SiTypescript),
+  cts: badge("TS", "lang-ts", "TypeScript CommonJS", SiTypescript),
+  tsx: badge("TSX", "lang-react", "React TSX", SiReact),
+  py: badge("PY", "lang-py", "Python", SiPython),
+  pyw: badge("PY", "lang-py", "Python", SiPython),
+  ipynb: badge("NB", "lang-py", "Jupyter Notebook", SiPython),
+  kt: badge("KT", "lang-kt", "Kotlin", SiKotlin),
+  kts: badge("KTS", "lang-kt", "Kotlin Script", SiKotlin),
+  java: badge("JAVA", "lang-java", "Java", SiOpenjdk),
+  go: badge("GO", "lang-go", "Go", SiGo),
+  rs: badge("RS", "lang-rs", "Rust", SiRust),
+  rb: badge("RB", "lang-rb", "Ruby", SiRuby),
+  php: badge("PHP", "lang-php", "PHP", SiPhp),
+  cs: badge("C#", "lang-cs", "C#", SiDotnet),
+  swift: badge("SW", "lang-swift", "Swift", SiSwift),
+  dart: badge("DART", "lang-dart", "Dart", SiDart),
+  scala: badge("SC", "lang-scala", "Scala", SiScala),
+  groovy: badge("GRV", "lang-gradle", "Groovy", SiGradle),
+  c: badge("C", "lang-c", "C", SiC),
+  h: badge("H", "lang-c", "C/C++ Header", SiC),
+  cc: badge("C++", "lang-cpp", "C++", SiCplusplus),
+  cpp: badge("C++", "lang-cpp", "C++", SiCplusplus),
+  cxx: badge("C++", "lang-cpp", "C++", SiCplusplus),
+  hpp: badge("H++", "lang-cpp", "C++ Header", SiCplusplus),
+  html: badge("HTML", "lang-html", "HTML", SiHtml5),
+  htm: badge("HTML", "lang-html", "HTML", SiHtml5),
+  css: badge("CSS", "lang-css", "CSS", SiCss),
+  scss: badge("SCSS", "lang-css", "SCSS", SiCss),
+  sass: badge("SASS", "lang-css", "Sass", SiCss),
+  less: badge("LESS", "lang-css", "Less", SiCss),
+  vue: badge("VUE", "lang-vue", "Vue", SiVuedotjs),
+  svelte: badge("SV", "lang-svelte", "Svelte", SiSvelte),
+  astro: badge("AST", "lang-astro", "Astro", SiAstro),
+  json: badge("JSON", "lang-json", "JSON", SiJson),
+  jsonc: badge("JSON", "lang-json", "JSONC", SiJson),
+  yml: badge("YML", "lang-yaml", "YAML", SiYaml),
+  yaml: badge("YAML", "lang-yaml", "YAML", SiYaml),
+  toml: badge("TOML", "lang-toml", "TOML", SiToml),
+  xml: badge("XML", "lang-xml", "XML"),
+  md: badge("MD", "lang-md", "Markdown", SiMarkdown),
+  mdx: badge("MDX", "lang-md", "MDX", SiMarkdown),
+  sql: badge("SQL", "lang-sql", "SQL", SiPostgresql),
+  sqlite: badge("SQL", "lang-sql", "SQLite", SiSqlite),
+  sqlite3: badge("SQL", "lang-sql", "SQLite", SiSqlite),
+  db: badge("DB", "lang-sql", "Database", SiSqlite),
+  gql: badge("GQL", "lang-gql", "GraphQL", SiGraphql),
+  graphql: badge("GQL", "lang-gql", "GraphQL", SiGraphql),
+  proto: badge("PB", "lang-proto", "Protocol Buffers"),
+  sh: badge("SH", "lang-shell", "Shell", SiGnubash),
+  bash: badge("SH", "lang-shell", "Bash", SiGnubash),
+  zsh: badge("ZSH", "lang-shell", "Zsh", SiShell),
+  fish: badge("FSH", "lang-shell", "Fish", SiFishshell),
+  ps1: badge("PS1", "lang-ps", "PowerShell", SiShell),
+  bat: badge("BAT", "lang-bat", "Batch", SiShell),
+  cmd: badge("CMD", "lang-bat", "Command Script", SiShell),
+  lua: badge("LUA", "lang-lua", "Lua", SiLua),
+  r: badge("R", "lang-r", "R", SiR),
+  ex: badge("EX", "lang-elixir", "Elixir", SiElixir),
+  exs: badge("EXS", "lang-elixir", "Elixir Script", SiElixir),
+  txt: badge("TXT", "lang-text", "Text"),
+  log: badge("LOG", "lang-text", "Log"),
+};
+
+function fileBadgeForPath(path: string): FileBadge {
+  const name = fileNameFromPath(path).toLowerCase();
+  const special = specialFileBadge(name);
+  if (special) return special;
+  const ext = fileExtension(name);
+  const known = ext ? LANGUAGE_BADGES[ext] : undefined;
+  if (known) return known;
+  if (ext) return badge(ext.slice(0, 4).toUpperCase(), "lang-generic", `.${ext}`);
+  return badge("FILE", "lang-generic", "文件");
+}
+
+function specialFileBadge(name: string): FileBadge | undefined {
+  if (name === "dockerfile" || name.endsWith(".dockerfile") || ["docker-compose.yml", "docker-compose.yaml", "compose.yml", "compose.yaml"].includes(name)) return badge("DK", "lang-docker", "Docker", SiDocker);
+  if (name === "makefile") return badge("MK", "lang-make", "Makefile", SiMake);
+  if (name === "cmakelists.txt") return badge("CMake", "lang-cmake", "CMake", SiCmake);
+  if (name.startsWith(".env")) return badge("ENV", "lang-env", "Environment", SiDotenv);
+  if (name.startsWith(".git")) return badge("GIT", "lang-git", "Git config", SiGit);
+  if (["package.json", "package-lock.json", "pnpm-lock.yaml", "pnpm-lock.yml", "yarn.lock"].includes(name)) return badge("NPM", "lang-node", "Node package", name === "package.json" ? SiNpm : SiNodedotjs);
+  if (name.startsWith("tsconfig") && name.endsWith(".json")) return badge("TS", "lang-ts", "TypeScript config", SiTypescript);
+  if (name === "go.mod" || name === "go.sum") return badge("GO", "lang-go", "Go module", SiGo);
+  if (name === "cargo.toml" || name === "cargo.lock" || name === "rust-toolchain") return badge("RS", "lang-rs", "Rust package", SiRust);
+  if (["requirements.txt", "pyproject.toml", "poetry.lock", "pdm.lock"].includes(name)) return badge("PY", "lang-py", "Python package", SiPython);
+  if (name === "pom.xml") return badge("MVN", "lang-java", "Maven", SiApachemaven);
+  if (name.endsWith(".gradle") || name.endsWith(".gradle.kts") || name === "gradlew") return badge("GRAD", "lang-gradle", "Gradle", SiGradle);
+  return undefined;
+}
+
+function badge(label: string, className: string, title: string, icon?: ElementType): FileBadge {
+  return { label, className, title, icon };
 }
 
 function buildEditDiffLines(edits: EditDiffInput[], fallbackPath?: string): DiffLine[] {
@@ -1260,10 +1593,10 @@ function toolResultMeta(result: any): ToolResultMeta | undefined {
   const text = typeof result === "string" ? result : resultToText(result);
   const meta: ToolResultMeta = {};
   const totalLines = numericMeta(records, ["totalLines", "total_lines", "lineCount", "line_count", "totalLineCount", "total_line_count", "linesTotal"]);
-  const shownLines = numericMeta(records, ["shownLines", "shown_lines", "displayedLines", "displayed_lines", "returnedLines", "returned_lines", "visibleLines", "visible_lines"]);
+  const shownLines = numericMeta(records, ["shownLines", "shown_lines", "displayedLines", "displayed_lines", "returnedLines", "returned_lines", "visibleLines", "visible_lines", "outputLines", "output_lines"]);
   const omittedLines = numericMeta(records, ["omittedLines", "omitted_lines", "truncatedLines", "truncated_lines", "remainingLines", "remaining_lines"]);
   const totalBytes = numericMeta(records, ["totalBytes", "total_bytes", "byteLength", "byte_length", "size", "totalSize", "total_size"]);
-  const shownBytes = numericMeta(records, ["shownBytes", "shown_bytes", "displayedBytes", "displayed_bytes", "returnedBytes", "returned_bytes"]);
+  const shownBytes = numericMeta(records, ["shownBytes", "shown_bytes", "displayedBytes", "displayed_bytes", "returnedBytes", "returned_bytes", "outputBytes", "output_bytes"]);
   const explicitTruncated = booleanMeta(records, ["truncated", "isTruncated", "is_truncated", "wasTruncated", "was_truncated"]);
   const omittedMatch = text.match(/(?:omitted|省略)\s*([0-9,]+)\s*(?:more\s*)?(?:lines?|行)/i);
   const totalMatch = text.match(/(?:total|共)\s*([0-9,]+)\s*(?:lines?|行)/i);
@@ -1287,6 +1620,7 @@ function enrichToolMeta(meta: ToolResultMeta | undefined, text: string): ToolRes
   if (lines && !next.shownLines) next.shownLines = lines;
   if (lines && !next.totalLines && !next.truncated) next.totalLines = lines;
   if (next.omittedLines && next.shownLines && !next.totalLines) next.totalLines = next.shownLines + next.omittedLines;
+  if (!next.omittedLines && next.totalLines && next.shownLines && next.totalLines > next.shownLines) next.omittedLines = next.totalLines - next.shownLines;
   return next;
 }
 
@@ -1299,7 +1633,7 @@ function collectRecords(value: unknown, out: Record<string, any>[] = [], depth =
   if (typeof value === "object") {
     const record = value as Record<string, any>;
     out.push(record);
-    for (const key of ["metadata", "meta", "stats", "summary", "content"]) collectRecords(record[key], out, depth + 1);
+    for (const key of ["metadata", "meta", "stats", "summary", "details", "truncation", "content"]) collectRecords(record[key], out, depth + 1);
   }
   return out;
 }

@@ -309,16 +309,119 @@ hr { border: 0; border-top: 1px solid var(--border); margin: 14px 0; }
 .tool-card summary::-webkit-details-marker { display: none; }
 .tool-card.running { border-color: color-mix(in srgb, var(--accent) 42%, var(--border)); }
 .tool-card.error { border-color: color-mix(in srgb, var(--red) 50%, var(--border)); }
-.tool-name { display: flex; align-items: center; gap: 6px; font-weight: 750; flex: 0 0 auto; }
-.tool-overview { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); font-size: 12px; }
-.tool-overview::before { content: "·"; margin-right: 8px; color: color-mix(in srgb, var(--muted) 55%, transparent); }
-.tool-status { margin-left: auto; color: var(--muted); font-size: 12px; flex: 0 0 auto; }
+.tool-icon { width: 24px; height: 24px; display: grid; place-items: center; flex: 0 0 auto; border-radius: 9px; color: var(--accent); background: color-mix(in srgb, var(--accent) 11%, transparent); }
+.tool-icon-read { color: #a5d6ff; background: rgba(88,166,255,.11); }
+.tool-icon-edit { color: #93c5fd; background: rgba(96,165,250,.12); }
+.tool-icon-write { color: #7ee787; background: rgba(46,160,67,.13); }
+.tool-icon-bash { color: #d0bcff; background: rgba(208,188,255,.12); }
+.tool-icon-ls, .tool-icon-find, .tool-icon-grep { color: #ffd8e4; background: rgba(239,184,200,.12); }
+.tool-icon-unknown { color: var(--muted); background: color-mix(in srgb, var(--md-sys-color-surface-container-highest) 72%, transparent); }
+.tool-name { display: flex; align-items: center; gap: 6px; font-weight: 800; font-size: 13px; letter-spacing: -.01em; flex: 0 0 auto; color: var(--text); }
+.tool-overview { min-width: 0; display: inline-flex; align-items: center; gap: 8px; overflow: hidden; white-space: nowrap; color: var(--muted); font-size: 12px; }
+.tool-overview > * { flex: 0 0 auto; }
+.tool-file-count, .tool-line-range, .tool-extra-count, .tool-muted { color: var(--muted); }
+.tool-change-group { display: inline-flex; align-items: center; gap: 5px; font: 800 12px/1 var(--terminal-font); }
+.tool-change.add { color: #7ee787; }
+.tool-change.del { color: #ff7b72; }
+.tool-file-ref, .tool-path-pill { display: inline-flex; align-items: center; gap: 5px; min-width: 0; max-width: min(240px, 38vw); }
+.tool-file-name, .tool-path-pill code { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: color-mix(in srgb, var(--text) 88%, var(--muted)); }
+.tool-file-badge { flex: 0 0 auto; min-width: 22px; height: 18px; display: inline-grid; place-items: center; border-radius: 5px; padding: 0 4px; text-align: center; background: color-mix(in srgb, var(--accent) 18%, transparent); color: var(--md-sys-color-on-primary-container); font: 900 9px/1 var(--terminal-font); letter-spacing: .015em; box-shadow: inset 0 -1px 0 rgba(0,0,0,.18), 0 0 0 1px rgba(255,255,255,.06); }
+.tool-file-badge.lang-js { background: #f7df1e; color: #332900; }
+.tool-file-badge.lang-react { background: #61dafb; color: #082f49; }
+.tool-file-badge.lang-ts { background: #3178c6; color: #fff; }
+.tool-file-badge.lang-py { background: linear-gradient(135deg, #3776ab 0 58%, #ffd43b 58%); color: #fff; text-shadow: 0 1px 1px rgba(0,0,0,.35); }
+.tool-file-badge.lang-kt { background: linear-gradient(135deg, #7f52ff, #c711e1 52%, #ff6d00); color: #fff; }
+.tool-file-badge.lang-java { background: #e76f00; color: #fff7ed; }
+.tool-file-badge.lang-go { background: #00add8; color: #042f3b; }
+.tool-file-badge.lang-rs { background: #dea584; color: #3b1d0f; }
+.tool-file-badge.lang-rb { background: #cc342d; color: #fff5f5; }
+.tool-file-badge.lang-php { background: #777bb4; color: #fff; }
+.tool-file-badge.lang-cs { background: #68217a; color: #fff; }
+.tool-file-badge.lang-swift { background: #f05138; color: #fff; }
+.tool-file-badge.lang-dart { background: #0175c2; color: #fff; }
+.tool-file-badge.lang-scala { background: #dc322f; color: #fff; }
+.tool-file-badge.lang-gradle { background: #02303a; color: #a5f3fc; }
+.tool-file-badge.lang-c { background: #555; color: #f8fafc; }
+.tool-file-badge.lang-cpp { background: #00599c; color: #fff; }
+.tool-file-badge.lang-html { background: #e34f26; color: #fff7ed; }
+.tool-file-badge.lang-css { background: #1572b6; color: #e0f2fe; }
+.tool-file-badge.lang-vue { background: #42b883; color: #06281b; }
+.tool-file-badge.lang-svelte { background: #ff3e00; color: #fff; }
+.tool-file-badge.lang-astro { background: linear-gradient(135deg, #ff5d01, #bc52ee); color: #fff; }
+.tool-file-badge.lang-json { background: #f97316; color: #fff7ed; }
+.tool-file-badge.lang-yaml { background: #cb171e; color: #fff; }
+.tool-file-badge.lang-toml { background: #9c4221; color: #fff7ed; }
+.tool-file-badge.lang-xml { background: #fb923c; color: #431407; }
+.tool-file-badge.lang-md { background: #64748b; color: #f8fafc; }
+.tool-file-badge.lang-sql { background: #336791; color: #e0f2fe; }
+.tool-file-badge.lang-gql { background: #e10098; color: #fff; }
+.tool-file-badge.lang-proto { background: #6d4aff; color: #fff; }
+.tool-file-badge.lang-shell { background: #4ade80; color: #052e16; }
+.tool-file-badge.lang-ps { background: #012456; color: #dbeafe; }
+.tool-file-badge.lang-bat { background: #374151; color: #f9fafb; }
+.tool-file-badge.lang-lua { background: #000080; color: #fff; }
+.tool-file-badge.lang-r { background: #276dc3; color: #fff; }
+.tool-file-badge.lang-elixir { background: #6e4a7e; color: #fff; }
+.tool-file-badge.lang-docker { background: #2496ed; color: #eff6ff; }
+.tool-file-badge.lang-make, .tool-file-badge.lang-cmake { background: #064e3b; color: #d1fae5; }
+.tool-file-badge.lang-env { background: #f59e0b; color: #1f1300; }
+.tool-file-badge.lang-git { background: #f05032; color: #fff7ed; }
+.tool-file-badge.lang-node { background: #3c873a; color: #f0fdf4; }
+.tool-file-badge.lang-text, .tool-file-badge.lang-generic { background: #475569; color: #e2e8f0; }
+.tool-file-badge.has-icon { width: 22px; min-width: 22px; height: 22px; padding: 0; border-radius: 7px; background: color-mix(in srgb, var(--md-sys-color-surface-container-highest) 78%, #000); color: var(--text); text-shadow: none; box-shadow: inset 0 0 0 1px rgba(255,255,255,.08), 0 1px 3px rgba(0,0,0,.22); }
+.tool-file-badge.has-icon svg { display: block; width: 14px; height: 14px; filter: drop-shadow(0 1px 1px rgba(0,0,0,.28)); }
+.tool-file-badge.has-icon.lang-js { color: #f7df1e; }
+.tool-file-badge.has-icon.lang-react { color: #61dafb; }
+.tool-file-badge.has-icon.lang-ts { color: #3178c6; }
+.tool-file-badge.has-icon.lang-py { color: #ffd43b; }
+.tool-file-badge.has-icon.lang-kt { color: #a78bfa; }
+.tool-file-badge.has-icon.lang-java { color: #f89820; }
+.tool-file-badge.has-icon.lang-go { color: #00add8; }
+.tool-file-badge.has-icon.lang-rs { color: #dea584; }
+.tool-file-badge.has-icon.lang-rb { color: #cc342d; }
+.tool-file-badge.has-icon.lang-php { color: #777bb4; }
+.tool-file-badge.has-icon.lang-cs { color: #a855f7; }
+.tool-file-badge.has-icon.lang-swift { color: #f05138; }
+.tool-file-badge.has-icon.lang-dart { color: #0175c2; }
+.tool-file-badge.has-icon.lang-scala { color: #dc322f; }
+.tool-file-badge.has-icon.lang-gradle { color: #8dd6f9; }
+.tool-file-badge.has-icon.lang-c { color: #a8b9cc; }
+.tool-file-badge.has-icon.lang-cpp { color: #659ad2; }
+.tool-file-badge.has-icon.lang-html { color: #e34f26; }
+.tool-file-badge.has-icon.lang-css { color: #1572b6; }
+.tool-file-badge.has-icon.lang-vue { color: #42b883; }
+.tool-file-badge.has-icon.lang-svelte { color: #ff3e00; }
+.tool-file-badge.has-icon.lang-astro { color: #ff5d01; }
+.tool-file-badge.has-icon.lang-json { color: #facc15; }
+.tool-file-badge.has-icon.lang-yaml { color: #cb171e; }
+.tool-file-badge.has-icon.lang-toml { color: #9c4221; }
+.tool-file-badge.has-icon.lang-md { color: #e2e8f0; }
+.tool-file-badge.has-icon.lang-sql { color: #336791; }
+.tool-file-badge.has-icon.lang-gql { color: #e10098; }
+.tool-file-badge.has-icon.lang-shell { color: #4ade80; }
+.tool-file-badge.has-icon.lang-lua { color: #7aa2ff; }
+.tool-file-badge.has-icon.lang-r { color: #276dc3; }
+.tool-file-badge.has-icon.lang-elixir { color: #a78bfa; }
+.tool-file-badge.has-icon.lang-docker { color: #2496ed; }
+.tool-file-badge.has-icon.lang-make, .tool-file-badge.has-icon.lang-cmake { color: #34d399; }
+.tool-file-badge.has-icon.lang-env { color: #ecd53f; }
+.tool-file-badge.has-icon.lang-git { color: #f05032; }
+.tool-file-badge.has-icon.lang-node { color: #68a063; }
+.tool-path-pill code { max-width: min(170px, 30vw); }
+.tool-inline-code { max-width: min(420px, 48vw); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; border-radius: 7px; padding: 2px 6px; background: color-mix(in srgb, var(--md-sys-color-primary) 10%, transparent); color: var(--md-sys-color-on-primary-container); font: 12px/1.25 var(--terminal-font); }
+.tool-status { margin-left: auto; width: 28px; display: flex; align-items: center; justify-content: flex-end; flex: 0 0 auto; }
+.tool-status-dot { width: 10px; height: 10px; border-radius: 50%; background: #7b7482; box-shadow: 0 0 0 3px rgba(123,116,130,.12); }
+.tool-status.pending .tool-status-dot { background: #7b7482; box-shadow: 0 0 0 3px rgba(123,116,130,.12); }
+.tool-status.running .tool-status-dot { background: #60a5fa; box-shadow: 0 0 0 0 rgba(96,165,250,.55); animation: dotPulseBlue 1.35s ease-out infinite; }
+.tool-status.done .tool-status-dot { background: #16a34a; box-shadow: 0 0 0 3px rgba(22,163,74,.14); }
+.tool-status.error .tool-status-dot { background: #ef4444; box-shadow: 0 0 0 3px rgba(239,68,68,.16); }
 .tool-section { border-top: 1px solid var(--border); padding: 10px 12px; }
 .tool-section pre { max-height: 320px; overflow: auto; margin: 6px 0 0; padding: 12px; border-radius: var(--radius-sm); background: #0f0d13; font-size: 12px; line-height: 1.45; white-space: pre-wrap; }
 .tool-preview { border-top: 1px solid var(--border); padding: 10px 12px 12px; display: grid; gap: 8px; }
 .tool-preview-head { display: flex; align-items: center; gap: 8px; min-width: 0; color: var(--muted); font-size: 12px; }
 .tool-preview-head > span:first-child { color: var(--text); font-weight: 750; }
 .tool-preview-head code { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--md-sys-color-on-primary-container); background: color-mix(in srgb, var(--accent) 10%, transparent); border-radius: 7px; padding: 2px 6px; }
+.tool-preview-head .tool-path-pill code { background: transparent; padding: 0; color: color-mix(in srgb, var(--text) 88%, var(--muted)); }
 .code-preview-shell, .diff-preview-shell { overflow: hidden; border-radius: var(--radius-sm); border: 1px solid color-mix(in srgb, var(--border) 78%, transparent); background: #0f0d13; }
 .code-preview { max-height: 280px; overflow: auto; margin: 0; padding: 10px 11px; border: 0; background: #0f0d13; color: #e6e1e5; font-size: 12px; line-height: 1.45; white-space: pre-wrap; }
 .command-preview-shell { border-color: color-mix(in srgb, var(--md-sys-color-primary) 34%, var(--border)); }
