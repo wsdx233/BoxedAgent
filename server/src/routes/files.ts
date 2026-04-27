@@ -19,9 +19,10 @@ export async function registerFileRoutes(app: FastifyInstance) {
     const box = store.getBox(boxId);
     const file = await dockerService.readArchiveFile(box, query.path);
     const type = mime.lookup(file.filename) || "application/octet-stream";
+    reply.raw.on("close", () => file.stream.destroy());
     reply.header("content-type", type);
     reply.header("content-disposition", `attachment; filename*=UTF-8''${encodeURIComponent(file.filename)}`);
-    if (file.size) reply.header("content-length", String(file.size));
+    if (file.size !== undefined) reply.header("content-length", String(file.size));
     return reply.send(file.stream);
   });
 

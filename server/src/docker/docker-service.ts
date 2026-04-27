@@ -226,25 +226,49 @@ print(json.dumps(items))`;
   async readArchiveFile(box: BoxRecord, relPath: string): Promise<{ stream: Readable; filename: string; size?: number }> {
     const container = await this.ensureRunningContainer(box);
     const target = this.toContainerPath(relPath);
-    const archive = await container.getArchive({ path: target });
+    const archive = await container.getArchive({ path: target }) as Readable;
     const extract = tar.extract();
     const out = new PassThrough();
     let found = false;
+    let finished = false;
     let filename = path.basename(relPath);
     let size: number | undefined;
+    let currentEntry: Readable | undefined;
+
+    const forwardError = (error: unknown) => {
+      if (out.destroyed) return;
+      out.destroy(error instanceof Error ? error : new Error(String(error)));
+    };
+    const abortArchive = () => {
+      if (finished) return;
+      archive.unpipe(extract);
+      currentEntry?.destroy();
+      extract.destroy();
+      archive.destroy();
+    };
+
+    archive.on("error", forwardError);
+    extract.on("error", forwardError);
+    out.on("close", abortArchive);
     extract.on("entry", (header, stream, next) => {
       if (!found && header.type === "file") {
         found = true;
         filename = path.basename(header.name);
         size = header.size;
+        currentEntry = stream;
+        stream.on("error", forwardError);
         stream.pipe(out, { end: true });
-        stream.on("end", next);
+        stream.on("end", () => { currentEntry = undefined; next(); });
       } else {
+        stream.on("error", forwardError);
         stream.resume();
         stream.on("end", next);
       }
     });
-    extract.on("finish", () => { if (!found) out.destroy(badRequest("not a regular file")); });
+    extract.on("finish", () => {
+      finished = true;
+      if (!found && !out.destroyed) out.destroy(badRequest("not a regular file"));
+    });
     archive.pipe(extract);
     return { stream: out, filename, size };
   }

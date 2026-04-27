@@ -619,6 +619,18 @@ hr { border: 0; border-top: 1px solid var(--border); margin: 14px 0; }
 .fork-message-item:hover:not(:disabled) { transform: none; background: color-mix(in srgb, var(--accent) 12%, var(--md-sys-color-surface-container)); }
 .fork-message-item > span:nth-child(2) { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .fork-message-index { font: 11px/1 var(--terminal-font); color: var(--md-sys-color-on-primary-container); border-radius: 999px; padding: 4px 7px; background: color-mix(in srgb, var(--md-sys-color-primary-container) 34%, transparent); }
+.modal.tree-modal { width: min(860px, 96vw); }
+.tree-message-list { display: grid; gap: 4px; max-height: min(500px, 58vh); overflow: auto; margin: 10px 0 12px; padding-right: 2px; }
+.tree-message-item { width: 100%; min-height: 38px; display: grid; grid-template-columns: auto auto minmax(0,1fr) auto auto; align-items: center; justify-content: stretch; gap: 8px; text-align: left; border-radius: 12px; padding: 7px 9px; background: transparent; border: 1px solid transparent; box-shadow: none; }
+.tree-message-item:hover:not(:disabled), .tree-message-item.active { transform: none; box-shadow: none; background: color-mix(in srgb, var(--accent) 11%, transparent); border-color: color-mix(in srgb, var(--accent) 24%, transparent); }
+.tree-message-item.in-path:not(.active) { background: color-mix(in srgb, var(--md-sys-color-primary-container) 9%, transparent); }
+.tree-indent { height: 1px; border-bottom: 1px dashed color-mix(in srgb, var(--border) 55%, transparent); }
+.tree-node-role { min-width: 42px; text-align: center; border-radius: 999px; padding: 3px 6px; font: 800 10px/1 var(--terminal-font); color: var(--muted); background: color-mix(in srgb, var(--md-sys-color-surface-container-highest) 65%, transparent); }
+.tree-node-role.user { color: var(--md-sys-color-on-primary); background: var(--md-sys-color-primary); }
+.tree-node-role.assistant { color: #d8b4fe; background: rgba(168,85,247,.14); }
+.tree-node-role.toolResult { color: #93c5fd; background: rgba(96,165,250,.13); }
+.tree-node-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text); font-size: 12.5px; }
+.tree-node-text em { color: var(--md-sys-color-on-primary-container); font-style: normal; }
 .form { display: grid; gap: 14px; }
 .session-model-picker { border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--md-sys-color-surface-container-low); padding: 0 10px 10px; overflow: hidden; }
 .session-model-picker > .dir-picker-head { margin: 0 -10px 10px; }

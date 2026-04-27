@@ -25,7 +25,9 @@ const ModelBody = z.object({ provider: z.string().min(1), modelId: z.string().mi
 const AutoCompactionBody = z.object({ enabled: z.boolean() });
 const CompactBody = z.object({ customInstructions: z.string().optional() }).default({});
 const DuplicateBody = z.object({ name: z.string().optional(), autostart: z.boolean().optional() }).default({});
+const CloneBody = z.object({ name: z.string().optional() }).default({});
 const ForkBody = z.object({ entryId: z.string().min(1), name: z.string().optional() });
+const TreeNavigateBody = z.object({ targetId: z.string().min(1) });
 
 export async function registerSessionRoutes(app: FastifyInstance) {
   app.get("/api/sessions", async (req) => {
@@ -60,6 +62,18 @@ export async function registerSessionRoutes(app: FastifyInstance) {
   app.post("/api/sessions/:sessionId/duplicate", async (req) => {
     const body = DuplicateBody.parse(req.body ?? {});
     return { session: await agentManager.duplicateSession((req.params as any).sessionId, body) };
+  });
+
+  app.post("/api/sessions/:sessionId/clone", async (req) => {
+    const body = CloneBody.parse(req.body ?? {});
+    return agentManager.cloneSession((req.params as any).sessionId, body);
+  });
+
+  app.get("/api/sessions/:sessionId/tree", async (req) => ({ tree: await agentManager.sessionTree((req.params as any).sessionId) }));
+
+  app.post("/api/sessions/:sessionId/tree/navigate", async (req) => {
+    const body = TreeNavigateBody.parse(req.body ?? {});
+    return agentManager.navigateTree((req.params as any).sessionId, body);
   });
 
   app.get("/api/sessions/:sessionId/fork-messages", async (req) => ({ messages: await agentManager.forkMessages((req.params as any).sessionId) }));

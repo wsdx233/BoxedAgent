@@ -65,6 +65,26 @@ export interface PiModel {
   [key: string]: unknown;
 }
 
+export interface SessionTreeNode {
+  id: string;
+  parentId: string | null;
+  depth: number;
+  type: string;
+  role?: string;
+  text: string;
+  timestamp?: string;
+  label?: string;
+  active: boolean;
+  inActivePath: boolean;
+}
+
+export interface SessionTree {
+  nodes: SessionTreeNode[];
+  activeId: string | null;
+  activePathIds: string[];
+  entryCount: number;
+}
+
 export interface SessionStats {
   sessionFile?: string;
   sessionId?: string;

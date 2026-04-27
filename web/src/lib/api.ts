@@ -1,4 +1,4 @@
-import type { AgentSessionRecord, BoxRecord, FileEntry, PiBoxConfig, PiModel, SessionStats, ThinkingLevel } from "./types";
+import type { AgentSessionRecord, BoxRecord, FileEntry, PiBoxConfig, PiModel, SessionStats, SessionTree, ThinkingLevel } from "./types";
 
 async function request<T>(url: string, init?: RequestInit): Promise<T> {
   const headers = new Headers(init?.headers);
@@ -39,6 +39,9 @@ export const api = {
   deleteSession: (id: string) => request<{ ok: boolean }>(`/api/sessions/${id}`, { method: "DELETE" }),
   abortSession: (id: string) => request<{ ok: boolean }>(`/api/sessions/${id}/abort`, { method: "POST" }),
   duplicateSession: (id: string, body?: { name?: string; autostart?: boolean }) => request<{ session: AgentSessionRecord }>(`/api/sessions/${id}/duplicate`, { method: "POST", body: JSON.stringify(body ?? {}) }),
+  cloneSession: (id: string, body?: { name?: string }) => request<{ session: AgentSessionRecord; cancelled?: boolean }>(`/api/sessions/${id}/clone`, { method: "POST", body: JSON.stringify(body ?? {}) }),
+  sessionTree: (id: string) => request<{ tree: SessionTree }>(`/api/sessions/${id}/tree`),
+  navigateSessionTree: (id: string, body: { targetId: string }) => request<{ session: AgentSessionRecord; editorText?: string; activeId: string | null }>(`/api/sessions/${id}/tree/navigate`, { method: "POST", body: JSON.stringify(body) }),
   forkMessages: (id: string) => request<{ messages: Array<{ entryId: string; text: string }> }>(`/api/sessions/${id}/fork-messages`),
   forkSession: (id: string, body: { entryId: string; name?: string }) => request<{ session: AgentSessionRecord; text?: string; cancelled?: boolean }>(`/api/sessions/${id}/fork`, { method: "POST", body: JSON.stringify(body) }),
   prompt: (id: string, body: { message: string; streamingBehavior?: "steer" | "followUp"; images?: Array<{ type: "image"; data: string; mimeType: string }> }) => request<{ ok: boolean }>(`/api/sessions/${id}/prompt`, { method: "POST", body: JSON.stringify(body) }),

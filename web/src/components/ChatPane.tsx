@@ -1,4 +1,4 @@
-import { FormEvent, memo, type Dispatch, type DragEvent, type ElementType, type PointerEvent as ReactPointerEvent, type ReactNode, type SetStateAction, type TouchEvent as ReactTouchEvent, useEffect, useMemo, useRef, useState } from "react";
+import { FormEvent, memo, type Dispatch, type DragEvent, type ElementType, type PointerEvent as ReactPointerEvent, type ReactNode, type SetStateAction, type TouchEvent as ReactTouchEvent, type WheelEvent as ReactWheelEvent, useEffect, useMemo, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import rehypeHighlight from "rehype-highlight";
@@ -140,14 +140,11 @@ export function ChatPane({ boxId, sessionId }: { boxId?: string; sessionId?: str
   const userProgressNodes = useMemo(() => messages.filter((m) => m.role === "user").map((m, idx) => ({ id: m.id, label: `#${idx + 1}`, text: m.text || attachmentSummary(m.attachments ?? []) })), [messages]);
 
   useEffect(() => {
-    if (!isNearBottom && !stickToBottomRef.current) return;
+    if (!stickToBottomRef.current) return;
     schedulePinnedScroll();
   }, [messages.length, messages.at(-1)?.text, messages.at(-1)?.thinking, messages.at(-1)?.toolResult, isNearBottom]);
 
-  useEffect(() => () => {
-    if (pinnedScrollRafRef.current !== undefined) window.cancelAnimationFrame(pinnedScrollRafRef.current);
-    if (pinnedScrollTimeoutRef.current !== undefined) window.clearTimeout(pinnedScrollTimeoutRef.current);
-  }, []);
+  useEffect(() => () => cancelPinnedScroll(), []);
 
   useEffect(() => {
     let raf = 0;
@@ -165,7 +162,7 @@ export function ChatPane({ boxId, sessionId }: { boxId?: string; sessionId?: str
       }));
       const remaining = scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight;
       const nearBottom = remaining < 180;
-      stickToBottomRef.current = nearBottom;
+      if (remaining < 8) stickToBottomRef.current = true;
       setIsNearBottom(nearBottom);
       setScrollProgress(Math.min(1, Math.max(0, scroller.scrollTop / maxScroll)));
     };
@@ -425,7 +422,8 @@ export function ChatPane({ boxId, sessionId }: { boxId?: string; sessionId?: str
   function updateScrollFollowState(el: HTMLDivElement) {
     const remaining = el.scrollHeight - el.scrollTop - el.clientHeight;
     const nearBottom = remaining < 180;
-    stickToBottomRef.current = nearBottom;
+    if (remaining < 8) stickToBottomRef.current = true;
+    else if (remaining > 24) stickToBottomRef.current = false;
     setIsNearBottom(nearBottom);
     const maxScroll = Math.max(1, el.scrollHeight - el.clientHeight);
     setScrollProgress(Math.min(1, Math.max(0, el.scrollTop / maxScroll)));
@@ -435,6 +433,26 @@ export function ChatPane({ boxId, sessionId }: { boxId?: string; sessionId?: str
     const el = messagesRef.current;
     if (!el) return;
     updateScrollFollowState(el);
+  }
+
+  function cancelPinnedScroll() {
+    if (pinnedScrollRafRef.current !== undefined) {
+      window.cancelAnimationFrame(pinnedScrollRafRef.current);
+      pinnedScrollRafRef.current = undefined;
+    }
+    if (pinnedScrollTimeoutRef.current !== undefined) {
+      window.clearTimeout(pinnedScrollTimeoutRef.current);
+      pinnedScrollTimeoutRef.current = undefined;
+    }
+  }
+
+  function detachFromBottom() {
+    stickToBottomRef.current = false;
+    cancelPinnedScroll();
+  }
+
+  function handleMessagesWheel(event: ReactWheelEvent<HTMLDivElement>) {
+    if (event.deltaY < 0) detachFromBottom();
   }
 
   function scrollMessagesToBottom(behavior: ScrollBehavior = "auto") {
@@ -449,15 +467,20 @@ export function ChatPane({ boxId, sessionId }: { boxId?: string; sessionId?: str
 
   function schedulePinnedScroll() {
     stickToBottomRef.current = true;
+    cancelPinnedScroll();
     scrollMessagesToBottom("auto");
-    if (pinnedScrollRafRef.current !== undefined) window.cancelAnimationFrame(pinnedScrollRafRef.current);
-    if (pinnedScrollTimeoutRef.current !== undefined) window.clearTimeout(pinnedScrollTimeoutRef.current);
-    pinnedScrollRafRef.current = window.requestAnimationFrame(() => scrollMessagesToBottom("auto"));
-    pinnedScrollTimeoutRef.current = window.setTimeout(() => scrollMessagesToBottom("auto"), 120);
+    pinnedScrollRafRef.current = window.requestAnimationFrame(() => {
+      pinnedScrollRafRef.current = undefined;
+      if (stickToBottomRef.current) scrollMessagesToBottom("auto");
+    });
+    pinnedScrollTimeoutRef.current = window.setTimeout(() => {
+      pinnedScrollTimeoutRef.current = undefined;
+      if (stickToBottomRef.current) scrollMessagesToBottom("auto");
+    }, 120);
   }
 
   function scrollToMessage(id: string) {
-    stickToBottomRef.current = false;
+    detachFromBottom();
     const el = document.getElementById(messageDomId(id));
     el?.scrollIntoView({ behavior: "smooth", block: "start" });
   }
@@ -470,7 +493,8 @@ export function ChatPane({ boxId, sessionId }: { boxId?: string; sessionId?: str
     const el = messagesRef.current;
     if (!el) return;
     const progress = clamp01(nextProgress);
-    stickToBottomRef.current = progress > 0.995;
+    if (progress > 0.995) stickToBottomRef.current = true;
+    else detachFromBottom();
     const maxScroll = Math.max(1, el.scrollHeight - el.clientHeight);
     el.scrollTop = progress * maxScroll;
     handleScroll();
@@ -684,7 +708,7 @@ export function ChatPane({ boxId, sessionId }: { boxId?: string; sessionId?: str
 
     <ChatProgressRail progress={scrollProgress} nodes={progressNodes} showBottomButton={!isNearBottom} onProgressChange={scrollToProgress} onJumpToMessage={scrollToMessage} onJumpBottom={scrollToBottom} />
 
-    <div className="messages" ref={messagesRef} onScroll={handleScroll}>
+    <div className="messages" ref={messagesRef} onScroll={handleScroll} onWheelCapture={handleMessagesWheel}>
       <div className="messages-content" ref={messagesContentRef}>
         {messagesLoading && <div className="session-loading-card"><Loader2 size={18} className="spin" /><strong>正在加载 Session…</strong><span>历史消息会在后台恢复，界面仍可操作。</span></div>}
         {!messagesLoading && messages.length === 0 && <div className="welcome-card">

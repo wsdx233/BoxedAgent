@@ -157,6 +157,13 @@ export class AgentRuntime {
     return { result, state };
   }
 
+  async clone(): Promise<{ result: { cancelled?: boolean }; state: AgentStateSnapshot }> {
+    await this.start();
+    const result = await this.send({ type: "clone" }, 120_000) as { cancelled?: boolean };
+    const state = await this.send({ type: "get_state" }, 30_000) as AgentStateSnapshot;
+    return { result, state };
+  }
+
   async availableModels(): Promise<PiModel[]> {
     await this.start();
     const data = await this.send({ type: "get_available_models" }, 30_000) as any;

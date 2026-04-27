@@ -1,8 +1,10 @@
-import type { AgentSessionRecord, PiModel, SessionStats, ThinkingLevel } from "../core/types.js";
+import type { AgentSessionRecord, BoxRecord, PiModel, SessionStats, ThinkingLevel } from "../core/types.js";
 import { store } from "../core/store.js";
 import { AgentRuntime, type PromptPayload } from "./agent-runtime.js";
 import { wsHub } from "../ws/hub.js";
 import { readPiSessionMessages } from "./session-reader.js";
+import { getPiSessionTree, navigatePiSessionTree } from "./session-tree.js";
+import { conflict } from "../core/errors.js";
 
 export class AgentManager {
   private runtimes = new Map<string, AgentRuntime>();
@@ -78,30 +80,36 @@ export class AgentManager {
     const runtime = await this.runtime(id);
     const { result, state } = await runtime.fork(input.entryId);
     if (result.cancelled) return { session: source, text: result.text, cancelled: true };
-    const now = new Date().toISOString();
-    const model = state.model as PiModel | null | undefined;
-    const session: AgentSessionRecord = {
-      id: store.newSessionId(),
-      boxId: source.boxId,
-      name: input.name?.trim() || `${source.name} fork`,
-      status: "running",
-      cwd: normalizeSessionCwd(source.cwd),
-      provider: modelProvider(model) ?? source.provider,
-      model: model?.id ?? source.model,
-      thinkingLevel: isThinkingLevel(state.thinkingLevel) ? state.thinkingLevel : source.thinkingLevel,
-      autoCompactionEnabled: typeof state.autoCompactionEnabled === "boolean" ? state.autoCompactionEnabled : source.autoCompactionEnabled,
-      sessionFile: typeof state.sessionFile === "string" ? state.sessionFile : source.sessionFile,
-      createdAt: now,
-      updatedAt: now,
-      lastActiveAt: now
-    };
-    const saved = await store.upsertSession(session);
-    await store.patchSession(source.id, { status: "stopped", lastActiveAt: now }).catch(() => undefined);
-    this.runtimes.delete(source.id);
-    runtime.rebind(saved, box);
-    this.runtimes.set(saved.id, runtime);
-    wsHub.publishBox(source.boxId, { type: "sessions_changed" });
-    return { session: store.getSession(saved.id), text: result.text, cancelled: false };
+    const saved = await this.createReboundSession(source, box, runtime, state, input.name?.trim() || `${source.name} fork`);
+    return { session: saved, text: result.text, cancelled: false };
+  }
+
+  async cloneSession(id: string, input: { name?: string } = {}): Promise<{ session: AgentSessionRecord; cancelled?: boolean }> {
+    const source = store.getSession(id);
+    if (source.status === "working") throw conflict("Cannot clone session while agent is working");
+    const box = store.getBox(source.boxId);
+    const runtime = await this.runtime(id);
+    const { result, state } = await runtime.clone();
+    if (result.cancelled) return { session: source, cancelled: true };
+    const saved = await this.createReboundSession(source, box, runtime, state, input.name?.trim() || `${source.name} clone`);
+    return { session: saved, cancelled: false };
+  }
+
+  async sessionTree(id: string) {
+    const session = store.getSession(id);
+    const box = store.getBox(session.boxId);
+    return getPiSessionTree(box, session.sessionFile);
+  }
+
+  async navigateTree(id: string, input: { targetId: string }): Promise<{ session: AgentSessionRecord; editorText?: string; activeId: string | null }> {
+    const session = store.getSession(id);
+    if (session.status === "working") throw conflict("Cannot navigate session tree while agent is working");
+    const box = store.getBox(session.boxId);
+    await this.stop(id).catch(() => undefined);
+    const result = await navigatePiSessionTree(box, session.sessionFile, input.targetId);
+    const updated = await store.patchSession(id, { status: "stopped", lastActiveAt: new Date().toISOString() });
+    wsHub.publishBox(session.boxId, { type: "sessions_changed" });
+    return { session: updated, editorText: result.editorText, activeId: result.activeId };
   }
 
   async stop(id: string) {
@@ -191,6 +199,33 @@ export class AgentManager {
   async stopAll() {
     await Promise.all([...this.runtimes.values()].map((r) => r.stop().catch(() => undefined)));
     this.runtimes.clear();
+  }
+
+  private async createReboundSession(source: AgentSessionRecord, box: BoxRecord, runtime: AgentRuntime, state: Record<string, unknown>, name: string): Promise<AgentSessionRecord> {
+    const now = new Date().toISOString();
+    const model = state.model as PiModel | null | undefined;
+    const session: AgentSessionRecord = {
+      id: store.newSessionId(),
+      boxId: source.boxId,
+      name,
+      status: "running",
+      cwd: normalizeSessionCwd(source.cwd),
+      provider: modelProvider(model) ?? source.provider,
+      model: model?.id ?? source.model,
+      thinkingLevel: isThinkingLevel(state.thinkingLevel) ? state.thinkingLevel : source.thinkingLevel,
+      autoCompactionEnabled: typeof state.autoCompactionEnabled === "boolean" ? state.autoCompactionEnabled : source.autoCompactionEnabled,
+      sessionFile: typeof state.sessionFile === "string" ? state.sessionFile : source.sessionFile,
+      createdAt: now,
+      updatedAt: now,
+      lastActiveAt: now
+    };
+    const saved = await store.upsertSession(session);
+    await store.patchSession(source.id, { status: "stopped", lastActiveAt: now }).catch(() => undefined);
+    this.runtimes.delete(source.id);
+    runtime.rebind(saved, box);
+    this.runtimes.set(saved.id, runtime);
+    wsHub.publishBox(source.boxId, { type: "sessions_changed" });
+    return store.getSession(saved.id);
   }
 
   private async runtime(id: string): Promise<AgentRuntime> {
