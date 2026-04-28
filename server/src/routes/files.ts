@@ -15,14 +15,18 @@ export async function registerFileRoutes(app: FastifyInstance) {
 
   app.get("/api/boxes/:boxId/files/download", async (req, reply) => {
     const { boxId } = req.params as { boxId: string };
-    const query = z.object({ path: z.string().min(1) }).parse(req.query ?? {});
+    const query = z.object({ path: z.string().min(1), inline: z.enum(["1", "true"]).optional() }).parse(req.query ?? {});
     const box = store.getBox(boxId);
-    const file = await dockerService.readArchiveFile(box, query.path);
+    const range = typeof req.headers.range === "string" ? req.headers.range : undefined;
+    const file = await dockerService.readArchiveFile(box, query.path, range);
     const type = mime.lookup(file.filename) || "application/octet-stream";
     reply.raw.on("close", () => file.stream.destroy());
+    reply.code(file.statusCode);
     reply.header("content-type", type);
-    reply.header("content-disposition", `attachment; filename*=UTF-8''${encodeURIComponent(file.filename)}`);
-    if (file.size !== undefined) reply.header("content-length", String(file.size));
+    reply.header("accept-ranges", "bytes");
+    reply.header("content-disposition", `${query.inline ? "inline" : "attachment"}; filename*=UTF-8''${encodeURIComponent(file.filename)}`);
+    reply.header("content-length", String(file.contentLength));
+    if (file.contentRange) reply.header("content-range", file.contentRange);
     return reply.send(file.stream);
   });
 

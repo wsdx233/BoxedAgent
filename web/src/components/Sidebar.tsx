@@ -9,7 +9,7 @@ import { CreateSessionModal } from "./CreateSessionModal";
 type ContextTarget = { kind: "box"; id: string; x: number; y: number } | { kind: "session"; id: string; x: number; y: number };
 
 export function Sidebar({ onNewBox, onSessionSelected }: { onNewBox: () => void; onSessionSelected?: () => void }) {
-  const { boxes, sessions, activeBoxId, activeSessionId, setActiveBox, setActiveSession, setBoxes, setSessions, setComposerDraft } = useAppStore();
+  const { boxes, sessions, activeBoxId, activeSessionId, setActiveBox, setActiveSession, setBoxes, setSessions, setComposerDraft, clearMessages } = useAppStore();
   const [showCreateSession, setShowCreateSession] = useState(false);
   const [menu, setMenu] = useState<ContextTarget>();
   const [renameTarget, setRenameTarget] = useState<{ kind: "box" | "session"; id: string; name: string }>();
@@ -63,7 +63,7 @@ export function Sidebar({ onNewBox, onSessionSelected }: { onNewBox: () => void;
     menuSession.status === "running" || menuSession.status === "working"
       ? { label: "停止", icon: <Square size={14} />, onClick: async () => { await api.stopSession(menuSession.id); await refresh(); } }
       : { label: "启动", icon: <Play size={14} />, onClick: async () => { await api.startSession(menuSession.id); await refresh(); } },
-    { label: "删除", icon: <Trash2 size={14} />, danger: true, onClick: async () => { if (confirm(`删除 Session ${menuSession.name}?`)) { await api.deleteSession(menuSession.id); await refresh(); } } }
+    { label: "删除", icon: <Trash2 size={14} />, danger: true, onClick: async () => { if (confirm(`删除 Session ${menuSession.name}?\n\n只会删除 BoxedAgent 中的这个 Session 记录，不会删除其它 Session 的对话文件。`)) { const deletingId = menuSession.id; await api.deleteSession(deletingId); clearMessages(deletingId); await refresh(); } } }
   ] : [];
 
   return <aside className="sidebar">

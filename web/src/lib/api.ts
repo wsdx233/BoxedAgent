@@ -64,7 +64,7 @@ export const api = {
     form.append("file", file);
     return request<{ ok: boolean }>(`/api/boxes/${boxId}/files/upload?path=${encodeURIComponent(p)}`, { method: "POST", body: form });
   },
-  downloadUrl: (boxId: string, p: string) => `/api/boxes/${boxId}/files/download?path=${encodeURIComponent(p)}`,
+  downloadUrl: (boxId: string, p: string, options?: { inline?: boolean }) => `/api/boxes/${boxId}/files/download?path=${encodeURIComponent(p)}${options?.inline ? "&inline=1" : ""}`,
   codeServerUrl: (boxId: string) => `${backendOrigin()}/codeserver/${boxId}/`
 };
 

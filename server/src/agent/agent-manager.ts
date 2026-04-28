@@ -80,7 +80,7 @@ export class AgentManager {
     const runtime = await this.runtime(id);
     const { result, state } = await runtime.fork(input.entryId);
     if (result.cancelled) return { session: source, text: result.text, cancelled: true };
-    const saved = await this.createReboundSession(source, box, runtime, state, input.name?.trim() || `${source.name} fork`);
+    const saved = await this.createReboundSessionAfterRuntimeSwitch(source, box, runtime, state, input.name?.trim() || `${source.name} fork`);
     return { session: saved, text: result.text, cancelled: false };
   }
 
@@ -91,7 +91,7 @@ export class AgentManager {
     const runtime = await this.runtime(id);
     const { result, state } = await runtime.clone();
     if (result.cancelled) return { session: source, cancelled: true };
-    const saved = await this.createReboundSession(source, box, runtime, state, input.name?.trim() || `${source.name} clone`);
+    const saved = await this.createReboundSessionAfterRuntimeSwitch(source, box, runtime, state, input.name?.trim() || `${source.name} clone`);
     return { session: saved, cancelled: false };
   }
 
@@ -201,6 +201,16 @@ export class AgentManager {
     this.runtimes.clear();
   }
 
+  private async createReboundSessionAfterRuntimeSwitch(source: AgentSessionRecord, box: BoxRecord, runtime: AgentRuntime, state: Record<string, unknown>, name: string): Promise<AgentSessionRecord> {
+    try {
+      return await this.createReboundSession(source, box, runtime, state, name);
+    } catch (error) {
+      await runtime.stop().catch(() => undefined);
+      this.runtimes.delete(source.id);
+      throw error;
+    }
+  }
+
   private async createReboundSession(source: AgentSessionRecord, box: BoxRecord, runtime: AgentRuntime, state: Record<string, unknown>, name: string): Promise<AgentSessionRecord> {
     const now = new Date().toISOString();
     const model = state.model as PiModel | null | undefined;
@@ -214,7 +224,7 @@ export class AgentManager {
       model: model?.id ?? source.model,
       thinkingLevel: isThinkingLevel(state.thinkingLevel) ? state.thinkingLevel : source.thinkingLevel,
       autoCompactionEnabled: typeof state.autoCompactionEnabled === "boolean" ? state.autoCompactionEnabled : source.autoCompactionEnabled,
-      sessionFile: typeof state.sessionFile === "string" ? state.sessionFile : source.sessionFile,
+      sessionFile: reboundSessionFile(source, state),
       createdAt: now,
       updatedAt: now,
       lastActiveAt: now
@@ -252,6 +262,19 @@ function isThinkingLevel(value: unknown): value is ThinkingLevel {
 function modelProvider(model: PiModel | null | undefined): string | undefined {
   const provider = model?.provider ?? model?.providerId ?? model?.providerName;
   return typeof provider === "string" && provider.trim() ? provider.trim() : undefined;
+}
+
+function reboundSessionFile(source: AgentSessionRecord, state: Record<string, unknown>): string {
+  const value = typeof state.sessionFile === "string" ? state.sessionFile.trim() : "";
+  if (!value) throw conflict("Pi did not return a session file for the cloned/forked session; refusing to create a session that may share history with the source.");
+  if (source.sessionFile && normalizeSessionFile(value) === normalizeSessionFile(source.sessionFile)) {
+    throw conflict("Pi returned the source session file for the cloned/forked session; refusing to create a session that would share history with the source.");
+  }
+  return value;
+}
+
+function normalizeSessionFile(value: string): string {
+  return value.replace(/\\/g, "/").replace(/\/+/g, "/").replace(/\/$/, "");
 }
 
 export const agentManager = new AgentManager();

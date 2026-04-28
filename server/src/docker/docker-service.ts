@@ -1,5 +1,6 @@
 import Docker from "dockerode";
 import fs from "fs-extra";
+import { createReadStream } from "node:fs";
 import path from "node:path";
 import { PassThrough, Readable } from "node:stream";
 import tar from "tar-stream";
@@ -223,54 +224,28 @@ print(json.dumps(items))`;
     return JSON.parse(result.stdout) as FileEntry[];
   }
 
-  async readArchiveFile(box: BoxRecord, relPath: string): Promise<{ stream: Readable; filename: string; size?: number }> {
-    const container = await this.ensureRunningContainer(box);
-    const target = this.toContainerPath(relPath);
-    const archive = await container.getArchive({ path: target }) as Readable;
-    const extract = tar.extract();
-    const out = new PassThrough();
-    let found = false;
-    let finished = false;
-    let filename = path.basename(relPath);
-    let size: number | undefined;
-    let currentEntry: Readable | undefined;
-
-    const forwardError = (error: unknown) => {
-      if (out.destroyed) return;
-      out.destroy(error instanceof Error ? error : new Error(String(error)));
-    };
-    const abortArchive = () => {
-      if (finished) return;
-      archive.unpipe(extract);
-      currentEntry?.destroy();
-      extract.destroy();
-      archive.destroy();
-    };
-
-    archive.on("error", forwardError);
-    extract.on("error", forwardError);
-    out.on("close", abortArchive);
-    extract.on("entry", (header, stream, next) => {
-      if (!found && header.type === "file") {
-        found = true;
-        filename = path.basename(header.name);
-        size = header.size;
-        currentEntry = stream;
-        stream.on("error", forwardError);
-        stream.pipe(out, { end: true });
-        stream.on("end", () => { currentEntry = undefined; next(); });
-      } else {
-        stream.on("error", forwardError);
-        stream.resume();
-        stream.on("end", next);
-      }
+  async readArchiveFile(box: BoxRecord, relPath: string, rangeHeader?: string): Promise<{ stream: Readable; filename: string; size: number; contentLength: number; contentRange?: string; statusCode: number }> {
+    const hostPath = await this.toWorkspaceHostPath(box, relPath);
+    const stat = await fs.stat(hostPath).catch((error) => {
+      if ((error as any)?.code === "ENOENT") throw notFound("file not found");
+      throw error;
     });
-    extract.on("finish", () => {
-      finished = true;
-      if (!found && !out.destroyed) out.destroy(badRequest("not a regular file"));
-    });
-    archive.pipe(extract);
-    return { stream: out, filename, size };
+    if (!stat.isFile()) throw badRequest("not a regular file");
+
+    const size = stat.size;
+    const range = parseByteRange(rangeHeader, size);
+    const start = range?.start ?? 0;
+    const end = range?.end ?? Math.max(0, size - 1);
+    const stream = size === 0 ? Readable.from([]) : createReadStream(hostPath, { start, end });
+    const contentLength = size === 0 ? 0 : end - start + 1;
+    return {
+      stream,
+      filename: path.basename(hostPath),
+      size,
+      contentLength,
+      contentRange: range ? `bytes ${start}-${end}/${size}` : undefined,
+      statusCode: range ? 206 : 200
+    };
   }
 
   async putFile(box: BoxRecord, relDir: string, filename: string, content: Buffer): Promise<void> {
@@ -462,11 +437,56 @@ shutil.move(src, dst)
     return `boxedagent-${id.replace(/[^a-zA-Z0-9_.-]/g, "-")}`;
   }
 
+  private async toWorkspaceHostPath(box: BoxRecord, rel: string): Promise<string> {
+    const normalized = path.posix.normalize(`/${rel}`).replace(/^\/+/, "");
+    if (normalized.startsWith("..")) throw badRequest("path escapes workspace");
+    const base = path.resolve(box.workspacePath);
+    const target = path.resolve(base, normalized);
+    const relative = path.relative(base, target);
+    if (relative.startsWith("..") || path.isAbsolute(relative)) throw badRequest("path escapes workspace");
+
+    let baseReal: string;
+    let targetReal: string;
+    try {
+      [baseReal, targetReal] = await Promise.all([fs.realpath(base), fs.realpath(target)]);
+    } catch (error) {
+      if ((error as any)?.code === "ENOENT") throw notFound("file not found");
+      throw error;
+    }
+    const realRelative = path.relative(baseReal, targetReal);
+    if (realRelative.startsWith("..") || path.isAbsolute(realRelative)) throw badRequest("path escapes workspace");
+    return targetReal;
+  }
+
   private toContainerPath(rel: string): string {
     const normalized = path.posix.normalize(`/${rel}`).replace(/^\/+/, "");
     if (normalized.startsWith("..")) throw badRequest("path escapes workspace");
     return path.posix.join("/workspace", normalized);
   }
+}
+
+function parseByteRange(rangeHeader: string | undefined, size: number): { start: number; end: number } | undefined {
+  if (!rangeHeader || size <= 0) return undefined;
+  const match = /^bytes=([^,]+)$/i.exec(rangeHeader.trim());
+  if (!match) return undefined;
+  const [startText = "", endText = ""] = match[1].split("-", 2);
+  let start: number;
+  let end: number;
+
+  if (!startText) {
+    const suffixLength = Number(endText);
+    if (!Number.isSafeInteger(suffixLength) || suffixLength <= 0) return undefined;
+    start = Math.max(size - suffixLength, 0);
+    end = size - 1;
+  } else {
+    start = Number(startText);
+    end = endText ? Number(endText) : size - 1;
+    if (!Number.isSafeInteger(start) || !Number.isSafeInteger(end)) return undefined;
+    end = Math.min(end, size - 1);
+  }
+
+  if (start < 0 || end < start || start >= size) throw badRequest("requested range not satisfiable");
+  return { start, end };
 }
 
 export const dockerService = new DockerService();

@@ -1,6 +1,6 @@
 import { type DragEvent, type MouseEvent, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { ArrowUp, Bookmark, BookmarkPlus, Check, Clipboard, ClipboardPaste, Copy, Download, File, Folder, FolderPlus, Link2, Loader2, MessageSquarePlus, MoreVertical, Pencil, RefreshCw, Scissors, Trash2, Upload, X } from "lucide-react";
+import { ArrowUp, Bookmark, BookmarkPlus, Check, Clipboard, ClipboardPaste, Copy, Download, File, FileText, Film, Folder, FolderPlus, Image as ImageIcon, Link2, Loader2, MessageSquarePlus, MoreVertical, Pencil, RefreshCw, Scissors, Trash2, Upload, X } from "lucide-react";
 import { api } from "../lib/api";
 import { fileRefForWorkspacePath, insertIntoComposer, workspaceAbsPath } from "../lib/composer-events";
 import type { FileEntry } from "../lib/types";
@@ -24,6 +24,7 @@ export function FileBrowser({ boxId }: { boxId?: string }) {
   const [uploading, setUploading] = useState(false);
   const [selectedPath, setSelectedPath] = useState<string>();
   const [menu, setMenu] = useState<FileMenuTarget>();
+  const [previewEntry, setPreviewEntry] = useState<FileEntry>();
   const [clipboard, setClipboard] = useState<ClipboardState>();
   const [bookmarks, setBookmarks] = useState<string[]>(() => boxId ? loadBookmarks(boxId) : []);
   const [renamingPath, setRenamingPath] = useState<string>();
@@ -59,6 +60,7 @@ export function FileBrowser({ boxId }: { boxId?: string }) {
     setClipboard(undefined);
     setSelectedPath(undefined);
     setMenu(undefined);
+    setPreviewEntry(undefined);
     setBookmarks(boxId ? loadBookmarks(boxId) : []);
   }, [boxId]);
 
@@ -104,6 +106,7 @@ export function FileBrowser({ boxId }: { boxId?: string }) {
   function openEntry(entry: FileEntry) {
     setSelectedPath(entry.path);
     if (entry.type === "directory") setPath(entry.path);
+    else if (previewKindForEntry(entry)) setPreviewEntry(entry);
   }
 
   function openMenu(event: MouseEvent, entry?: FileEntry) {
@@ -244,6 +247,16 @@ export function FileBrowser({ boxId }: { boxId?: string }) {
     setMenu(undefined);
   }
 
+  function previewFile(entry: FileEntry) {
+    if (!boxId || entry.type !== "file") return;
+    if (!previewKindForEntry(entry)) {
+      downloadEntry(entry);
+      return;
+    }
+    setPreviewEntry(entry);
+    setMenu(undefined);
+  }
+
   function downloadEntry(entry: FileEntry) {
     if (!boxId || entry.type !== "file") return;
     window.open(api.downloadUrl(boxId, entry.path), "_blank", "noopener,noreferrer");
@@ -263,10 +276,15 @@ export function FileBrowser({ boxId }: { boxId?: string }) {
       { label: "刷新", icon: <RefreshCw size={14} />, onClick: () => load() }
     ];
     const isDirectory = target.type === "directory";
+    const previewKind = previewKindForEntry(target);
+    const primaryItems: FileMenuItem[] = isDirectory
+      ? [{ label: "打开", icon: <Folder size={14} />, onClick: () => setPath(target.path) }]
+      : [
+        ...(previewKind ? [{ label: "预览", icon: previewIcon(previewKind, 14), onClick: () => previewFile(target) }] : []),
+        { label: "下载", icon: <Download size={14} />, onClick: () => downloadEntry(target) }
+      ];
     return [
-      isDirectory
-        ? { label: "打开", icon: <Folder size={14} />, onClick: () => setPath(target.path) }
-        : { label: "下载", icon: <Download size={14} />, onClick: () => downloadEntry(target) },
+      ...primaryItems,
       { label: "附加到聊天", icon: <MessageSquarePlus size={14} />, disabled: target.type !== "file" || !activeSessionId, onClick: () => attachToChat(target) },
       { label: "复制路径", icon: <Link2 size={14} />, onClick: () => copyAbsPath(target) },
       ...(isDirectory ? [{ label: bookmarks.includes(normalizeRelPath(target.path)) ? "移除目录书签" : "收藏目录", icon: bookmarks.includes(normalizeRelPath(target.path)) ? <Bookmark size={14} /> : <BookmarkPlus size={14} />, onClick: () => toggleBookmark(target.path) }] : []),
@@ -353,19 +371,116 @@ export function FileBrowser({ boxId }: { boxId?: string }) {
         const selected = selectedPath === entry.path;
         const cut = clipboard?.mode === "cut" && clipboard.entry.path === entry.path && clipboard.boxId === boxId;
         const renaming = renamingPath === entry.path;
+        const previewKind = previewKindForEntry(entry);
         return <div className={`file-tree-row ${selected ? "selected" : ""} ${cut ? "cut" : ""}`} key={entry.path} onClick={() => setSelectedPath(entry.path)} onDoubleClick={() => openEntry(entry)} onContextMenu={(event) => openMenu(event, entry)}>
           <div className="file-tree-name" title={workspaceAbsPath(entry.path)}>
-            {entry.type === "directory" ? <Folder size={15} /> : <File size={15} />}
+            {entry.type === "directory" ? <Folder size={15} /> : fileIconForEntry(entry, 15)}
             {renaming ? <input autoFocus value={renameValue} onClick={(event) => event.stopPropagation()} onChange={(event) => setRenameValue(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter") { event.preventDefault(); void commitRename(entry); } if (event.key === "Escape") cancelRename(); }} onBlur={() => void commitRename(entry)} /> : <span>{entry.name}</span>}
           </div>
           <span className="file-tree-meta">{entry.type === "file" ? formatSize(entry.size) : entry.type === "directory" ? "" : entry.type}</span>
-          <button type="button" className="file-tree-menu" title="操作" onClick={(event) => openMenu(event, entry)}><MoreVertical size={15} /></button>
+          <div className="file-tree-inline-actions">
+            {previewKind && <button type="button" className="file-tree-preview" title="预览" onClick={(event) => { event.stopPropagation(); previewFile(entry); }}>{previewIcon(previewKind, 15)}</button>}
+            <button type="button" className="file-tree-menu" title="操作" onClick={(event) => openMenu(event, entry)}><MoreVertical size={15} /></button>
+          </div>
         </div>;
       })}
       {!loading && entries.length === 0 && <div className="file-empty small">当前目录为空</div>}
     </div>
 
     {menu && createPortal(<FileContextMenu x={menu.x} y={menu.y} items={menuItems(menu.entry)} onClose={() => setMenu(undefined)} />, document.body)}
+    {previewEntry && <FilePreviewModal boxId={boxId} entry={previewEntry} onClose={() => setPreviewEntry(undefined)} onDownload={() => downloadEntry(previewEntry)} />}
+  </div>;
+}
+
+type FilePreviewKind = "image" | "video" | "text";
+const TEXT_PREVIEW_LIMIT = 2 * 1024 * 1024;
+
+function FilePreviewModal({ boxId, entry, onClose, onDownload }: { boxId: string; entry: FileEntry; onClose: () => void; onDownload: () => void }) {
+  const kind = previewKindForEntry(entry);
+  const url = api.downloadUrl(boxId, entry.path, { inline: true });
+  const [text, setText] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string>();
+  const [wrap, setWrap] = useState(false);
+  const [forceLoad, setForceLoad] = useState(false);
+  const tooLargeForText = kind === "text" && entry.size > TEXT_PREVIEW_LIMIT && !forceLoad;
+
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => { if (event.key === "Escape") onClose(); };
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    window.addEventListener("keydown", onKey);
+    return () => {
+      document.body.style.overflow = previousOverflow;
+      window.removeEventListener("keydown", onKey);
+    };
+  }, [onClose]);
+
+  useEffect(() => {
+    if (kind !== "text" || tooLargeForText) return;
+    const controller = new AbortController();
+    setLoading(true);
+    setError(undefined);
+    setText("");
+    fetch(url, { credentials: "include", signal: controller.signal })
+      .then(async (res) => {
+        if (!res.ok) throw new Error(res.statusText || `HTTP ${res.status}`);
+        return res.text();
+      })
+      .then(setText)
+      .catch((err) => {
+        if (!controller.signal.aborted) setError(err instanceof Error ? err.message : String(err));
+      })
+      .finally(() => {
+        if (!controller.signal.aborted) setLoading(false);
+      });
+    return () => controller.abort();
+  }, [kind, tooLargeForText, url]);
+
+  if (!kind) return null;
+  const label = kind === "image" ? "图片" : kind === "video" ? "视频" : "文本 / 代码";
+  const lineCount = kind === "text" && text ? text.split("\n").length : 0;
+
+  return createPortal(<div className="modal-backdrop file-preview-backdrop" onMouseDown={onClose}>
+    <div className={`modal file-preview-modal ${kind}`} role="dialog" aria-modal="true" aria-label={`${entry.name} 预览`} onMouseDown={(event) => event.stopPropagation()}>
+      <div className="file-preview-head">
+        <div className="file-preview-title">
+          {previewIcon(kind, 20)}
+          <div>
+            <strong title={entry.name}>{entry.name}</strong>
+            <small title={workspaceAbsPath(entry.path)}>{workspaceAbsPath(entry.path)} · {formatSize(entry.size)} · {label}{lineCount ? ` · ${lineCount} 行` : ""}</small>
+          </div>
+        </div>
+        <div className="file-preview-actions">
+          {kind === "text" && <button type="button" title={wrap ? "关闭自动换行" : "自动换行"} onClick={() => setWrap((value) => !value)}>{wrap ? "不换行" : "换行"}</button>}
+          <button type="button" title="下载" onClick={onDownload}><Download size={15} /><span>下载</span></button>
+          <button type="button" className="icon-only" title="关闭" onClick={onClose}><X size={17} /></button>
+        </div>
+      </div>
+      <div className="file-preview-body">
+        {kind === "image" && <div className="file-media-preview image-preview">
+          {error ? <PreviewEmpty icon={<ImageIcon size={30} />} title="图片加载失败" detail={error} /> : <img src={url} alt={entry.name} onError={() => setError("浏览器无法显示该图片格式或文件已不可用。")} />}
+        </div>}
+        {kind === "video" && <div className="file-media-preview video-preview">
+          {error ? <PreviewEmpty icon={<Film size={30} />} title="视频加载失败" detail={error} /> : <video src={url} controls playsInline preload="metadata" onError={() => setError("浏览器无法播放该视频格式。可以下载后用本地播放器打开。")} />}
+        </div>}
+        {kind === "text" && <div className="file-text-preview-shell">
+          {tooLargeForText ? <PreviewEmpty icon={<FileText size={30} />} title="文件较大，未自动加载" detail={`${formatSize(entry.size)} 可能会影响浏览器性能。`} action={<button type="button" onClick={() => setForceLoad(true)}>仍然预览</button>} />
+            : loading ? <PreviewEmpty icon={<Loader2 size={30} className="spin" />} title="正在加载文本…" />
+              : error ? <PreviewEmpty icon={<FileText size={30} />} title="文本加载失败" detail={error} />
+                : <pre className={`file-code-preview ${wrap ? "wrap" : ""}`}><code>{text || " "}</code></pre>}
+        </div>}
+      </div>
+    </div>
+  </div>, document.body);
+}
+
+function PreviewEmpty({ icon, title, detail, action }: { icon: JSX.Element; title: string; detail?: string; action?: JSX.Element }) {
+  return <div className="file-preview-empty">
+    {icon}
+    <strong>{title}</strong>
+    {detail && <span>{detail}</span>}
+    {action}
   </div>;
 }
 
@@ -387,6 +502,39 @@ function FileContextMenu({ x, y, items, onClose }: { x: number; y: number; items
 function hasDraggedFiles(event: DragEvent<HTMLElement>) {
   return Array.from(event.dataTransfer?.types ?? []).includes("Files");
 }
+
+function previewKindForEntry(entry: FileEntry): FilePreviewKind | undefined {
+  if (entry.type !== "file") return undefined;
+  const name = entry.name.toLowerCase();
+  const ext = extensionOf(name);
+  if (IMAGE_EXTENSIONS.has(ext)) return "image";
+  if (VIDEO_EXTENSIONS.has(ext)) return "video";
+  if (TEXT_EXTENSIONS.has(ext) || TEXT_FILENAMES.has(name) || name.startsWith(".env")) return "text";
+  return undefined;
+}
+
+function previewIcon(kind: FilePreviewKind, size: number): JSX.Element {
+  if (kind === "image") return <ImageIcon size={size} />;
+  if (kind === "video") return <Film size={size} />;
+  return <FileText size={size} />;
+}
+
+function fileIconForEntry(entry: FileEntry, size: number): JSX.Element {
+  const kind = previewKindForEntry(entry);
+  return kind ? previewIcon(kind, size) : <File size={size} />;
+}
+
+function extensionOf(name: string) {
+  const index = name.lastIndexOf(".");
+  return index >= 0 ? name.slice(index + 1).toLowerCase() : "";
+}
+
+const IMAGE_EXTENSIONS = new Set(["apng", "avif", "bmp", "gif", "ico", "jfif", "jpg", "jpeg", "png", "svg", "tif", "tiff", "webp"]);
+const VIDEO_EXTENSIONS = new Set(["3gp", "m4v", "mov", "mp4", "mpeg", "mpg", "ogv", "webm"]);
+const TEXT_EXTENSIONS = new Set([
+  "astro", "bash", "bat", "c", "cc", "cfg", "clj", "cljs", "cmake", "cmd", "conf", "cpp", "cs", "css", "csv", "cts", "cxx", "dart", "diff", "dockerfile", "dts", "env", "fish", "go", "graphql", "gql", "h", "hpp", "hs", "htm", "html", "ini", "java", "jl", "js", "json", "jsonc", "jsx", "kt", "kts", "less", "lock", "log", "lua", "m", "make", "md", "mdx", "mjs", "ml", "mts", "patch", "php", "pl", "properties", "ps1", "py", "r", "rb", "rs", "sass", "scala", "scss", "sh", "sql", "svelte", "swift", "toml", "ts", "tsx", "txt", "vue", "xml", "yaml", "yml", "zsh"
+]);
+const TEXT_FILENAMES = new Set(["dockerfile", "makefile", "readme", "license", "licence", "changelog", "authors", "contributors", "copying", ".gitignore", ".dockerignore", ".npmrc", ".nvmrc", ".editorconfig", ".prettierrc", ".eslintrc", "requirements.txt", "pipfile", "gemfile", "rakefile", "go.mod", "go.sum", "cargo.toml", "cargo.lock", "package.json", "package-lock.json", "pnpm-lock.yaml", "yarn.lock"]);
 
 function formatSize(n: number) {
   if (n < 1024) return `${n} B`;
