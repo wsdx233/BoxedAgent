@@ -38,6 +38,16 @@ const CreateBox = z.object({
 
 const PatchBox = CreateBox.partial().omit({ autostart: true }).extend({ workspacePath: z.string().optional() });
 
+function cloneJson<T>(value: T): T {
+  return JSON.parse(JSON.stringify(value)) as T;
+}
+
+function duplicateBoxName(name: string): string {
+  const suffix = "-copy";
+  const base = name.trim() || "box";
+  return `${base.slice(0, 80 - suffix.length)}${suffix}`;
+}
+
 export async function registerBoxRoutes(app: FastifyInstance) {
   app.get("/api/boxes", async () => ({ boxes: store.listBoxes() }));
 
@@ -120,6 +130,45 @@ export async function registerBoxRoutes(app: FastifyInstance) {
     wsHub.publishGlobal({ type: "boxes_changed" });
     wsHub.publishBox(boxId, { type: "box_updated", box: next });
     return next;
+  });
+
+  app.post("/api/boxes/:boxId/duplicate", async (req, reply) => {
+    const boxId = (req.params as any).boxId as string;
+    const body = z.object({ name: z.string().min(1).max(80).optional(), description: z.string().optional(), autostart: z.boolean().default(true) }).parse(req.body ?? {});
+    const source = store.getBox(boxId);
+    const id = store.newBoxId();
+    const now = new Date().toISOString();
+    let duplicate: BoxRecord = {
+      ...cloneJson(source),
+      id,
+      name: body.name?.trim() || duplicateBoxName(source.name),
+      description: body.description ?? source.description,
+      workspacePath: path.join(paths.workspacesDir, id),
+      containerId: undefined,
+      status: "creating",
+      createdAt: now,
+      updatedAt: now,
+      lastActiveAt: undefined,
+      error: undefined
+    };
+    duplicate = await store.upsertBox(duplicate);
+    wsHub.publishGlobal({ type: "boxes_changed" });
+    try {
+      const containerId = await dockerService.createContainer(duplicate);
+      duplicate = await store.patchBox(id, { containerId, status: "stopped" });
+      if (body.autostart) {
+        const started = await dockerService.start(duplicate);
+        duplicate = await store.patchBox(id, { containerId: started.containerId, status: "running", lastActiveAt: new Date().toISOString() });
+      }
+      wsHub.publishGlobal({ type: "boxes_changed" });
+      reply.code(201);
+      return duplicate;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      await store.patchBox(id, { status: "error", error: message });
+      wsHub.publishGlobal({ type: "boxes_changed" });
+      throw error;
+    }
   });
 
   app.post("/api/boxes/:boxId/clone", async (req, reply) => {

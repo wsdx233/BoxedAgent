@@ -22,6 +22,7 @@ export const api = {
   listBoxes: () => request<{ boxes: BoxRecord[] }>("/api/boxes"),
   createBox: (body: Partial<BoxRecord> & { name: string; autostart?: boolean }) => request<BoxRecord>("/api/boxes", { method: "POST", body: JSON.stringify(body) }),
   updateBox: (id: string, body: Partial<BoxRecord>) => request<BoxRecord>(`/api/boxes/${id}`, { method: "PATCH", body: JSON.stringify(body) }),
+  duplicateBox: (id: string, body?: { name?: string; description?: string; autostart?: boolean }) => request<BoxRecord>(`/api/boxes/${id}/duplicate`, { method: "POST", body: JSON.stringify(body ?? {}) }),
   cloneBox: (id: string, body: { name: string; description?: string; autostart?: boolean }) => request<BoxRecord>(`/api/boxes/${id}/clone`, { method: "POST", body: JSON.stringify(body) }),
   startBox: (id: string) => request<BoxRecord>(`/api/boxes/${id}/start`, { method: "POST" }),
   stopBox: (id: string) => request<BoxRecord>(`/api/boxes/${id}/stop`, { method: "POST" }),

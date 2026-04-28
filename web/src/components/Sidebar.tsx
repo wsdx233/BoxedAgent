@@ -50,6 +50,7 @@ export function Sidebar({ onNewBox, onSessionSelected }: { onNewBox: () => void;
     menuBox.status === "running"
       ? { label: "停止", icon: <Square size={14} />, onClick: async () => { await api.stopBox(menuBox.id); await refresh(); } }
       : { label: "启动", icon: <Play size={14} />, onClick: async () => { await api.startBox(menuBox.id); await refresh(); } },
+    { label: "复刻配置", icon: <Copy size={14} />, onClick: async () => { const name = prompt("复刻名称", duplicateBoxName(menuBox.name))?.trim(); if (name) { const box = await api.duplicateBox(menuBox.id, { name }); await refresh(); setActiveBox(box.id); } } },
     { label: "克隆", icon: <Copy size={14} />, onClick: async () => { const name = prompt("克隆名称", `${menuBox.name}-clone`)?.trim(); if (name) { await api.cloneBox(menuBox.id, { name }); await refresh(); } } },
     { label: "删除", icon: <Trash2 size={14} />, danger: true, onClick: async () => { if (confirm(`删除 Box ${menuBox.name}?`)) { await api.deleteBox(menuBox.id); await refresh(); } } }
   ] : [];
@@ -121,6 +122,12 @@ function SessionItem({ session, active, onSelect, onContextMenu, onMenu }: { ses
 function StatusIndicator({ status }: { status: string }) {
   if (status === "running" || status === "working" || status === "stopped") return <span className={`status-dot ${status}`} title={status} aria-label={status} />;
   return <span className={`status ${status}`}>{status}</span>;
+}
+
+function duplicateBoxName(name: string): string {
+  const suffix = "-copy";
+  const base = name.trim() || "box";
+  return `${base.slice(0, 80 - suffix.length)}${suffix}`;
 }
 
 function previewText(value: string, max = 120): string {
