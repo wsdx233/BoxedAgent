@@ -1,5 +1,6 @@
 import { create } from "zustand";
 import { newId } from "../lib/id";
+import { readActiveSessionCookie } from "../lib/selection-cookie";
 import type { AgentSessionRecord, BoxRecord, ChatMessage } from "../lib/types";
 
 interface AppState {
@@ -25,16 +26,20 @@ interface AppState {
 export const useAppStore = create<AppState>((set) => ({
   boxes: [],
   sessions: [],
+  activeSessionId: readActiveSessionCookie(),
   messagesBySession: {},
   composerDrafts: {},
   setBoxes: (boxes) => set((s) => {
     const activeBoxId = s.activeBoxId && boxes.some((b) => b.id === s.activeBoxId) ? s.activeBoxId : boxes[0]?.id;
-    const activeSessionId = activeBoxId === s.activeBoxId ? s.activeSessionId : undefined;
+    const activeSession = s.activeSessionId ? s.sessions.find((session) => session.id === s.activeSessionId) : undefined;
+    const activeSessionId = activeSession && activeSession.boxId !== activeBoxId ? undefined : s.activeSessionId;
     return { boxes, activeBoxId, activeSessionId };
   }),
   setSessions: (sessions) => set((s) => {
-    const activeSessionId = s.activeSessionId && sessions.some((session) => session.id === s.activeSessionId) ? s.activeSessionId : sessions.find((session) => !s.activeBoxId || session.boxId === s.activeBoxId)?.id;
-    return { sessions, activeSessionId };
+    const selectedSession = s.activeSessionId ? sessions.find((session) => session.id === s.activeSessionId) : undefined;
+    if (selectedSession) return { sessions, activeBoxId: selectedSession.boxId, activeSessionId: selectedSession.id };
+    const fallback = sessions.find((session) => !s.activeBoxId || session.boxId === s.activeBoxId);
+    return { sessions, activeSessionId: fallback?.id, activeBoxId: s.activeBoxId ?? fallback?.boxId };
   }),
   setActiveBox: (id) => set({ activeBoxId: id, activeSessionId: undefined }),
   setActiveSession: (id) => set({ activeSessionId: id }),

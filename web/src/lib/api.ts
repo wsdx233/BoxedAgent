@@ -32,6 +32,8 @@ export const api = {
   getPiConfig: (boxId: string) => request<{ pi: PiBoxConfig; env: Record<string, string>; materialized: { piCodingAgentDir: string; settings: Record<string, unknown> } }>(`/api/boxes/${boxId}/pi-config`),
   updatePiConfig: (boxId: string, body: PiBoxConfig & { settingsJsonText?: string; modelsJsonText?: string; env?: Record<string, string> }) => request<{ pi: PiBoxConfig; env: Record<string, string>; materialized: { piCodingAgentDir: string; settings: Record<string, unknown> } }>(`/api/boxes/${boxId}/pi-config`, { method: "PUT", body: JSON.stringify(body) }),
 
+  getCurrentSession: () => request<{ sessionId?: string; activeSessionId?: string; boxId?: string; session?: AgentSessionRecord }>("/api/current-session"),
+  setCurrentSession: (sessionId?: string) => request<{ ok: boolean; sessionId?: string; activeSessionId?: string; boxId?: string; session?: AgentSessionRecord }>("/api/current-session", { method: sessionId ? "PUT" : "DELETE", body: sessionId ? JSON.stringify({ sessionId }) : undefined }),
   listSessions: (boxId?: string) => request<{ sessions: AgentSessionRecord[] }>(`/api/sessions${boxId ? `?boxId=${encodeURIComponent(boxId)}` : ""}`),
   createSession: (body: { boxId: string; name?: string; cwd?: string; provider?: string; model?: string; thinkingLevel?: ThinkingLevel; autostart?: boolean }) => request<AgentSessionRecord>("/api/sessions", { method: "POST", body: JSON.stringify(body) }),
   startSession: (id: string) => request<AgentSessionRecord>(`/api/sessions/${id}/start`, { method: "POST" }),

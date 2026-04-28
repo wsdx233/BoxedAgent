@@ -6,6 +6,7 @@ import { Sidebar } from "./components/Sidebar";
 import { api, closeWebSocketQuietly, wsUrl } from "./lib/api";
 import { useAppStore } from "./state/app";
 import { Boxes as BoxesIcon, LogOut, MessageSquare, PanelLeftClose, PanelLeftOpen, PanelRightClose, PanelRightOpen, ShieldCheck, Wrench } from "lucide-react";
+import { writeActiveSessionCookie } from "./lib/selection-cookie";
 
 type MobilePanel = "boxes" | "chat" | "tools";
 
@@ -56,7 +57,11 @@ export function App() {
   }, [activeBoxId, auth.loading, auth.enabled, auth.authenticated]);
 
   useEffect(() => {
-    if (!activeBoxId) return;
+    writeActiveSessionCookie(activeSessionId);
+  }, [activeSessionId]);
+
+  useEffect(() => {
+    if (!activeBoxId || sessions.length === 0) return;
     const belongs = sessions.some((s) => s.id === activeSessionId && s.boxId === activeBoxId);
     if (!belongs) setActiveSession(sessions.find((s) => s.boxId === activeBoxId)?.id);
   }, [activeBoxId, sessions, activeSessionId]);

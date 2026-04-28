@@ -1,4 +1,4 @@
-import type { FastifyInstance } from "fastify";
+import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { z } from "zod";
 import { store } from "../core/store.js";
 import { agentManager } from "../agent/agent-manager.js";
@@ -28,8 +28,21 @@ const DuplicateBody = z.object({ name: z.string().optional(), autostart: z.boole
 const CloneBody = z.object({ name: z.string().optional() }).default({});
 const ForkBody = z.object({ entryId: z.string().min(1), name: z.string().optional() });
 const TreeNavigateBody = z.object({ targetId: z.string().min(1) });
+const SelectedSessionBody = z.object({ sessionId: z.string().optional().nullable(), activeSessionId: z.string().optional().nullable() }).default({});
+const ACTIVE_SESSION_COOKIE = "boxedagent_active_session";
+const ACTIVE_SESSION_COOKIE_MAX_AGE_SECONDS = 60 * 60 * 24 * 365;
 
 export async function registerSessionRoutes(app: FastifyInstance) {
+  app.get("/api/current-session", async (req) => selectedSessionResponse(readCookie(req, ACTIVE_SESSION_COOKIE)));
+  app.get("/api/selected-session", async (req) => selectedSessionResponse(readCookie(req, ACTIVE_SESSION_COOKIE)));
+
+  app.post("/api/current-session", async (req, reply) => setSelectedSession(req, reply));
+  app.post("/api/selected-session", async (req, reply) => setSelectedSession(req, reply));
+  app.put("/api/current-session", async (req, reply) => setSelectedSession(req, reply));
+  app.put("/api/selected-session", async (req, reply) => setSelectedSession(req, reply));
+  app.delete("/api/current-session", async (_req, reply) => clearSelectedSession(reply));
+  app.delete("/api/selected-session", async (_req, reply) => clearSelectedSession(reply));
+
   app.get("/api/sessions", async (req) => {
     const query = z.object({ boxId: z.string().optional() }).parse(req.query ?? {});
     return { sessions: store.listSessions(query.boxId) };
@@ -128,6 +141,64 @@ export async function registerSessionRoutes(app: FastifyInstance) {
     await agentManager.delete((req.params as any).sessionId);
     return { ok: true };
   });
+}
+
+function clearSelectedSession(reply: FastifyReply) {
+  clearCookie(reply, ACTIVE_SESSION_COOKIE);
+  return { ok: true, sessionId: undefined, activeSessionId: undefined };
+}
+
+async function setSelectedSession(req: FastifyRequest, reply: FastifyReply) {
+  const body = SelectedSessionBody.parse(req.body ?? {});
+  const sessionId = (body.sessionId ?? body.activeSessionId ?? "").trim();
+  if (!sessionId) {
+    clearCookie(reply, ACTIVE_SESSION_COOKIE);
+    return { ok: true, sessionId: undefined, activeSessionId: undefined };
+  }
+  const session = store.getSession(sessionId);
+  setCookie(reply, req, ACTIVE_SESSION_COOKIE, session.id);
+  return { ok: true, sessionId: session.id, activeSessionId: session.id, boxId: session.boxId, session };
+}
+
+function selectedSessionResponse(sessionId?: string) {
+  if (!sessionId) return { sessionId: undefined, activeSessionId: undefined };
+  try {
+    const session = store.getSession(sessionId);
+    return { sessionId: session.id, activeSessionId: session.id, boxId: session.boxId, session };
+  } catch {
+    return { sessionId: undefined, activeSessionId: undefined };
+  }
+}
+
+function setCookie(reply: FastifyReply, req: FastifyRequest, name: string, value: string) {
+  const secure = shouldUseSecureCookie(req);
+  reply.header("set-cookie", `${name}=${encodeURIComponent(value)}; Path=/; Max-Age=${ACTIVE_SESSION_COOKIE_MAX_AGE_SECONDS}; SameSite=Lax${secure ? "; Secure" : ""}`);
+}
+
+function clearCookie(reply: FastifyReply, name: string) {
+  reply.header("set-cookie", `${name}=; Path=/; Max-Age=0; SameSite=Lax`);
+}
+
+function shouldUseSecureCookie(req: FastifyRequest) {
+  const forwardedProto = String(req.headers["x-forwarded-proto"] ?? "").split(",")[0]?.trim();
+  return forwardedProto === "https";
+}
+
+function readCookie(req: FastifyRequest, name: string): string | undefined {
+  for (const part of String(req.headers.cookie ?? "").split(";")) {
+    const idx = part.indexOf("=");
+    if (idx <= 0) continue;
+    const key = part.slice(0, idx).trim();
+    if (key !== name) continue;
+    const value = safeDecode(part.slice(idx + 1).trim()).trim();
+    return value.length > 0 && value.length <= 200 ? value : undefined;
+  }
+  return undefined;
+}
+
+function safeDecode(value: string): string {
+  try { return decodeURIComponent(value); }
+  catch { return value; }
 }
 
 function normalizeSessionCwd(value?: string): string {
