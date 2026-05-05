@@ -134,6 +134,22 @@ export type ChatAttachment =
   | { kind: "image"; name: string; mimeType: string; data: string; path?: string; size?: number }
   | { kind: "file"; name: string; path: string; size?: number; mimeType?: string };
 
+export interface ChatMessageTruncationPath {
+  path: string;
+  totalChars: number;
+  shownChars: number;
+  omittedChars: number;
+}
+
+export interface ChatMessageTransportMeta {
+  messageId: string;
+  truncated: boolean;
+  totalChars?: number;
+  shownChars?: number;
+  omittedChars?: number;
+  paths?: ChatMessageTruncationPath[];
+}
+
 export interface ChatMessage {
   id: string;
   role: ChatMessageRole;
@@ -147,4 +163,5 @@ export interface ChatMessage {
   toolResult?: string;
   toolResultMeta?: ToolResultMeta;
   toolStatus?: ChatToolStatus;
+  transport?: ChatMessageTransportMeta;
 }

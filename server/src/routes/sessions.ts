@@ -3,6 +3,7 @@ import { z } from "zod";
 import { store } from "../core/store.js";
 import { agentManager } from "../agent/agent-manager.js";
 import { dockerService } from "../docker/docker-service.js";
+import { attachMessageMeta } from "../agent/message-truncation.js";
 
 const CreateSession = z.object({
   boxId: z.string().min(1),
@@ -106,7 +107,21 @@ export async function registerSessionRoutes(app: FastifyInstance) {
 
   app.get("/api/sessions/:sessionId/stats", async (req) => ({ stats: await agentManager.stats((req.params as any).sessionId) }));
 
-  app.get("/api/sessions/:sessionId/messages", async (req) => ({ messages: await agentManager.messages((req.params as any).sessionId) }));
+  app.get("/api/sessions/:sessionId/messages", async (req) => {
+    const query = z.object({ expand: z.string().optional() }).parse(req.query ?? {});
+    const expandedMessageIds = parseMessageIdList(query.expand);
+    return { messages: await agentManager.messages((req.params as any).sessionId, { expandedMessageIds }) };
+  });
+
+  app.get("/api/sessions/:sessionId/messages/:messageId", async (req, reply) => {
+    const { sessionId, messageId } = req.params as { sessionId: string; messageId: string };
+    const message = await agentManager.message(sessionId, messageId);
+    if (message === undefined) {
+      reply.code(404);
+      return { error: "Message not found" };
+    }
+    return { message: attachMessageMeta(message, messageId) };
+  });
 
   app.get("/api/sessions/:sessionId/models", async (req) => ({ models: await agentManager.availableModels((req.params as any).sessionId) }));
 
@@ -214,4 +229,8 @@ function cwdToWorkspaceRel(cwd?: string): string {
   const normalized = normalizeSessionCwd(cwd);
   if (normalized === "/workspace") return ".";
   return normalized.slice("/workspace/".length) || ".";
+}
+
+function parseMessageIdList(value?: string): string[] {
+  return String(value ?? "").split(",").map((item) => item.trim()).filter((item) => /^[A-Za-z0-9_-]{1,120}$/.test(item)).slice(0, 200);
 }

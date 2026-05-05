@@ -519,6 +519,10 @@ hr { border: 0; border-top: 1px solid var(--border); margin: 14px 0; }
 .message.user .message-attachment-list { justify-content: flex-start; }
 .message.user .message-file-card { background: color-mix(in srgb, var(--md-sys-color-on-primary) 14%, transparent); border-color: color-mix(in srgb, var(--md-sys-color-on-primary) 22%, transparent); }
 .message.user .message-file-card small { color: color-mix(in srgb, var(--md-sys-color-on-primary) 72%, transparent); }
+.truncation-notice { margin-top: 10px; display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 8px 10px; border: 1px solid color-mix(in srgb, var(--accent) 28%, var(--border)); border-radius: var(--radius-sm); background: color-mix(in srgb, var(--md-sys-color-primary-container) 14%, transparent); color: var(--muted); font-size: 12px; }
+.truncation-notice button { flex: 0 0 auto; }
+.tool-card > .truncation-notice { margin: 0 12px 12px; }
+.system-line .truncation-notice { flex: 1; margin-top: 0; }
 .attachment-preview-backdrop { z-index: 180; }
 .attachment-preview-modal { width: min(760px, 94vw); padding: 0; overflow: hidden; }
 .attachment-preview-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 12px 14px; border-bottom: 1px solid var(--border); background: color-mix(in srgb, var(--md-sys-color-surface-container-high) 76%, transparent); }

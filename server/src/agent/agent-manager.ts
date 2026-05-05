@@ -2,7 +2,7 @@ import type { AgentSessionRecord, BoxRecord, PiModel, SessionStats, ThinkingLeve
 import { store } from "../core/store.js";
 import { AgentRuntime, type PromptPayload } from "./agent-runtime.js";
 import { wsHub } from "../ws/hub.js";
-import { readPiSessionMessages } from "./session-reader.js";
+import { readPiSessionMessage, readPiSessionMessages } from "./session-reader.js";
 import { getPiSessionTree, navigatePiSessionTree } from "./session-tree.js";
 import { conflict } from "../core/errors.js";
 
@@ -167,9 +167,9 @@ export class AgentManager {
     return runtime.compact(customInstructions);
   }
 
-  async messages(id: string): Promise<unknown[]> {
+  async messages(id: string, options: { expandedMessageIds?: Iterable<string> } = {}): Promise<unknown[]> {
     const runtime = this.runtimes.get(id);
-    if (runtime?.isActive()) return runtime.messages();
+    if (runtime?.isActive()) return runtime.messages(options);
     let session: AgentSessionRecord;
     try {
       session = store.getSession(id);
@@ -179,7 +179,7 @@ export class AgentManager {
     }
     try {
       const box = store.getBox(session.boxId);
-      return readPiSessionMessages(box, session.sessionFile);
+      return readPiSessionMessages(box, session.sessionFile, options);
     } catch (error) {
       if ((error as any)?.code === "NOT_FOUND") {
         await store.patchSession(id, { status: "error", error: "The Box for this session no longer exists" }).catch(() => undefined);
@@ -187,6 +187,14 @@ export class AgentManager {
       }
       throw error;
     }
+  }
+
+  async message(id: string, messageId: string): Promise<unknown | undefined> {
+    const runtime = this.runtimes.get(id);
+    if (runtime?.isActive()) return runtime.message(messageId);
+    const session = store.getSession(id);
+    const box = store.getBox(session.boxId);
+    return readPiSessionMessage(box, session.sessionFile, messageId);
   }
 
   async delete(id: string) {

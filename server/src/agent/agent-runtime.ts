@@ -7,6 +7,7 @@ import { store } from "../core/store.js";
 import { wsHub } from "../ws/hub.js";
 import { conflict } from "../core/errors.js";
 import { piRuntimeEnv } from "./pi-config.js";
+import { attachMessageMeta, findSessionMessageById, truncateSessionMessages } from "./message-truncation.js";
 
 interface PendingRequest {
   resolve: (value: unknown) => void;
@@ -138,10 +139,19 @@ export class AgentRuntime {
     return this.send({ type: "get_state" }) as Promise<AgentStateSnapshot>;
   }
 
-  async messages(): Promise<unknown[]> {
+  async messages(options: { expandedMessageIds?: Iterable<string> } = {}): Promise<unknown[]> {
     await this.start();
     const data = await this.send({ type: "get_messages" }) as any;
-    return Array.isArray(data?.messages) ? data.messages : [];
+    const messages = Array.isArray(data?.messages) ? data.messages : [];
+    return truncateSessionMessages(messages, options);
+  }
+
+  async message(messageId: string): Promise<unknown | undefined> {
+    await this.start();
+    const data = await this.send({ type: "get_messages" }) as any;
+    const messages = Array.isArray(data?.messages) ? data.messages : [];
+    const message = findSessionMessageById(messages, messageId);
+    return message === undefined ? undefined : attachMessageMeta(message, messageId);
   }
 
   async forkMessages(): Promise<Array<{ entryId: string; text: string }>> {
@@ -257,13 +267,27 @@ export class AgentRuntime {
         reject(new Error(`RPC command timed out: ${String(command.type)}`));
       }, timeoutMs);
       this.pending.set(id, { resolve, reject, timer });
-      this.stream!.write(`${JSON.stringify(payload)}\n`, "utf8", (err) => {
+      this.writeRpcLine(id, payload, timer, reject);
+    });
+  }
+
+  private writeRpcLine(id: string, payload: Record<string, unknown>, timer: NodeJS.Timeout, reject: (reason?: unknown) => void) {
+    const line = `${JSON.stringify(payload)}\n`;
+    setImmediate(() => {
+      if (!this.stream || this.stopped) {
+        clearTimeout(timer);
+        this.pending.delete(id);
+        reject(conflict("agent runtime is not running"));
+        return;
+      }
+      const writable = this.stream.write(line, "utf8", (err) => {
         if (err) {
           clearTimeout(timer);
           this.pending.delete(id);
           reject(err);
         }
       });
+      if (!writable) this.stream.once("drain", () => undefined);
     });
   }
 
@@ -303,7 +327,7 @@ export class AgentRuntime {
     if (eventStatus === "running") this.workRequested = false;
     void store.patchSession(this.record.id, { lastActiveAt: new Date().toISOString(), status: eventStatus ?? (this.workRequested ? "working" : "running") }).catch(() => undefined);
     if (eventStatus) this.publishStatus(eventStatus);
-    wsHub.publishSession(this.record.id, { type: "agent_event", event: message });
+    setImmediate(() => wsHub.publishSession(this.record.id, { type: "agent_event", event: message }));
   }
 
   private fail(error: unknown) {

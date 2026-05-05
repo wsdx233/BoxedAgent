@@ -111,6 +111,7 @@ export function ChatPane({ boxId, sessionId }: { boxId?: string; sessionId?: str
   const [dragActive, setDragActive] = useState(false);
   const [uploadingFiles, setUploadingFiles] = useState(false);
   const [messagesLoading, setMessagesLoading] = useState(false);
+  const [expandingMessageIds, setExpandingMessageIds] = useState<Set<string>>(() => new Set());
   const messagesRef = useRef<HTMLDivElement>(null);
   const messagesContentRef = useRef<HTMLDivElement>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
@@ -136,7 +137,7 @@ export function ChatPane({ boxId, sessionId }: { boxId?: string; sessionId?: str
       : models;
     return filtered.slice(0, 180);
   }, [models, modelSearch]);
-  const renderedMessages = useMemo(() => messages.map((m, idx) => <div key={m.id} id={messageDomId(m.id)} className="message-anchor-wrap"><MemoMessageBubble message={m} isLatest={idx === messages.length - 1} boxId={boxId} /></div>), [messages, boxId]);
+  const renderedMessages = useMemo(() => messages.map((m, idx) => <div key={m.id} id={messageDomId(m.id)} className="message-anchor-wrap"><MemoMessageBubble message={m} isLatest={idx === messages.length - 1} boxId={boxId} isExpanding={Boolean(m.transport?.messageId && expandingMessageIds.has(m.transport.messageId))} onExpand={expandMessage} /></div>), [messages, boxId, expandingMessageIds]);
   const userProgressNodes = useMemo(() => messages.filter((m) => m.role === "user").map((m, idx) => ({ id: m.id, label: `#${idx + 1}`, text: m.text || attachmentSummary(m.attachments ?? []) })), [messages]);
 
   useEffect(() => {
@@ -235,6 +236,7 @@ export function ChatPane({ boxId, sessionId }: { boxId?: string; sessionId?: str
     if (!sessionId) return;
     let cancelled = false;
     setQueue({ steering: [], followUp: [] });
+    setExpandingMessageIds(new Set());
     expectingTurnRef.current = false;
     setTurnActive(false);
     const ws = new WebSocket(wsUrl(`/ws/sessions/${sessionId}/events`));
@@ -339,7 +341,7 @@ export function ChatPane({ boxId, sessionId }: { boxId?: string; sessionId?: str
     setMessagesLoading(true);
     void api.messages(sessionId).then(async (res) => {
       await yieldToBrowser();
-      const normalized = normalizePiMessages(res.messages);
+      const normalized = await normalizePiMessagesAsync(res.messages, () => cancelled);
       if (!cancelled) setSessionMessages(sessionId, normalized);
     }).catch(() => undefined).finally(() => {
       if (!cancelled) setMessagesLoading(false);
@@ -498,6 +500,28 @@ export function ChatPane({ boxId, sessionId }: { boxId?: string; sessionId?: str
     const maxScroll = Math.max(1, el.scrollHeight - el.clientHeight);
     el.scrollTop = progress * maxScroll;
     handleScroll();
+  }
+
+  async function expandMessage(messageId: string) {
+    if (!sessionId || expandingMessageIds.has(messageId)) return;
+    setExpandingMessageIds((prev) => new Set(prev).add(messageId));
+    try {
+      const res = await api.message(sessionId, messageId);
+      await yieldToBrowser();
+      const normalized = await normalizePiMessagesAsync([res.message], () => false);
+      const replacement = normalized[0];
+      if (!replacement) return;
+      const current = useAppStore.getState().messagesBySession[sessionId] ?? [];
+      setSessionMessages(sessionId, replaceExpandedMessage(current, messageId, normalized));
+    } catch (err) {
+      appendMessage(sessionId, { id: newId(), role: "system", text: `展开完整消息失败：${err instanceof Error ? err.message : String(err)}`, timestamp: Date.now() });
+    } finally {
+      setExpandingMessageIds((prev) => {
+        const next = new Set(prev);
+        next.delete(messageId);
+        return next;
+      });
+    }
   }
 
   function patchSessionLocal(patch: Partial<AgentSessionRecord>) {
@@ -832,19 +856,29 @@ function EmptyChat({ title, subtitle }: { title: string; subtitle: string }) {
   </div>;
 }
 
-function MessageBubble({ message, isLatest, boxId }: { message: ChatMessage; isLatest: boolean; boxId?: string }) {
-  if (message.role === "tool") return <ToolCard message={message} isLatest={isLatest} />;
-  if (message.role === "system") return <div className="system-line"><CircleAlert size={14} /> <MarkdownText text={message.text} /></div>;
+function MessageBubble({ message, isLatest, boxId, isExpanding, onExpand }: { message: ChatMessage; isLatest: boolean; boxId?: string; isExpanding?: boolean; onExpand?: (messageId: string) => void }) {
+  const truncation = message.transport?.truncated ? message.transport : undefined;
+  if (message.role === "tool") return <ToolCard message={message} isLatest={isLatest} isExpanding={isExpanding} onExpand={onExpand} />;
+  if (message.role === "system") return <div className="system-line"><CircleAlert size={14} /> <MarkdownText text={message.text} />{truncation && <TruncationNotice meta={truncation} loading={isExpanding} onExpand={onExpand} />}</div>;
   return <article className={`message-row ${message.role}`}>
     <div className={`message ${message.role}`}>
       {message.thinking && <ThinkingBlock text={message.thinking} autoOpen={isLatest} />}
       {message.text ? message.role === "user" ? <UserMessageText text={message.text} /> : <MarkdownText text={message.text} /> : message.thinking ? null : <span className="muted">…</span>}
       {message.attachments?.length ? <AttachmentGallery attachments={message.attachments} boxId={boxId} /> : null}
+      {truncation && <TruncationNotice meta={truncation} loading={isExpanding} onExpand={onExpand} />}
     </div>
   </article>;
 }
 
 const MemoMessageBubble = memo(MessageBubble);
+
+function TruncationNotice({ meta, loading, onExpand }: { meta: NonNullable<ChatMessage["transport"]>; loading?: boolean; onExpand?: (messageId: string) => void }) {
+  if (!meta.truncated) return null;
+  return <div className="truncation-notice">
+    <span>已截断长消息{meta.omittedChars ? `，省略 ${formatNumber(meta.omittedChars)} 字符` : ""}</span>
+    <button type="button" className="button-tonal compact" disabled={loading} onClick={() => onExpand?.(meta.messageId)}>{loading ? <Loader2 size={13} className="spin" /> : <Eye size={13} />} 展开完整消息</button>
+  </div>;
+}
 
 function ChatProgressRail({ progress, nodes, showBottomButton, onProgressChange, onJumpToMessage, onJumpBottom }: {
   progress: number;
@@ -1035,7 +1069,7 @@ function ThinkingBlock({ text, autoOpen }: { text: string; autoOpen: boolean }) 
   </details>;
 }
 
-function ToolCard({ message, isLatest }: { message: ChatMessage; isLatest: boolean }) {
+function ToolCard({ message, isLatest, isExpanding, onExpand }: { message: ChatMessage; isLatest: boolean; isExpanding?: boolean; onExpand?: (messageId: string) => void }) {
   const status = message.toolStatus ?? "pending";
   const kind = toolKindForName(message.toolName);
   const autoOpen = isLatest || status === "running";
@@ -1049,6 +1083,7 @@ function ToolCard({ message, isLatest }: { message: ChatMessage; isLatest: boole
       <span className={`tool-status ${status}`} title={`状态：${toolStatusLabel(status)}`} aria-label={`工具调用${toolStatusLabel(status)}`}><span className="tool-status-dot" /></span>
     </summary>
     <ToolPreview message={message} />
+    {message.transport?.truncated && <TruncationNotice meta={message.transport} loading={isExpanding} onExpand={onExpand} />}
   </details>;
 }
 
@@ -1548,28 +1583,32 @@ async function filesToImages(files: Iterable<File> | null, uploaded?: Map<File, 
   }));
 }
 
-function normalizePiMessages(messages: any[]): ChatMessage[] {
+async function normalizePiMessagesAsync(messages: any[], isCancelled: () => boolean): Promise<ChatMessage[]> {
   const toolCalls = new Map<string, { tool: Partial<ChatMessage>; outIndex?: number }>();
   const out: ChatMessage[] = [];
-  messages.forEach((m, idx) => {
+  for (let idx = 0; idx < messages.length; idx++) {
+    if (isCancelled()) break;
+    if (idx > 0 && idx % 20 === 0) await yieldToBrowser();
+    const m = messages[idx];
+    const transport = transportMeta(m);
     const timestamp = m.timestamp ?? Date.now();
     if (m.role === "user") {
       const imageAttachments = attachmentsFromContent(m.content);
       const expanded = extractInlineFileBlocks(contentToText(m.content) || m.message || "");
       const attachments = [...imageAttachments, ...expanded.attachments];
-      out.push({ id: `${idx}-${timestamp}`, role: "user", text: expanded.text || attachmentSummary(attachments), attachments, timestamp });
-      return;
+      out.push({ id: `${idx}-${timestamp}`, role: "user", text: expanded.text || attachmentSummary(attachments), attachments, timestamp, transport });
+      continue;
     }
     if (m.role === "assistant") {
       const { text, thinking, tools } = contentParts(m.content);
       const summary = m.summary ? `[summary]\n${m.summary}` : "";
-      if (text || thinking || summary) out.push({ id: `${idx}-${timestamp}-assistant`, role: "assistant", text: text || summary, thinking, timestamp });
+      if (text || thinking || summary) out.push({ id: `${idx}-${timestamp}-assistant`, role: "assistant", text: text || summary, thinking, timestamp, transport });
       tools.forEach((tool, toolIdx) => {
-        const toolMessage: ChatMessage = { id: `${idx}-${timestamp}-tool-${toolIdx}`, role: "tool", text: "", timestamp, ...tool };
+        const toolMessage: ChatMessage = { id: `${idx}-${timestamp}-tool-${toolIdx}`, role: "tool", text: "", timestamp, transport, ...tool };
         out.push(toolMessage);
         if (tool.toolCallId) toolCalls.set(String(tool.toolCallId), { tool, outIndex: out.length - 1 });
       });
-      return;
+      continue;
     }
     const callId = String(m.tool_call_id ?? m.toolCallId ?? m.id ?? `${idx}-${timestamp}`);
     const priorEntry = toolCalls.get(callId);
@@ -1584,15 +1623,33 @@ function normalizePiMessages(messages: any[]): ChatMessage[] {
       toolStatus: m.isError ? "error" : "done",
       toolResult: contentToText(m.content) || resultToText(m.result) || JSON.stringify(m),
       toolResultMeta: toolResultMeta(m.result ?? m.content),
-      timestamp
+      timestamp,
+      transport
     };
     if (priorEntry?.outIndex !== undefined) {
-      out[priorEntry.outIndex] = { ...out[priorEntry.outIndex], ...toolMessage, id: out[priorEntry.outIndex].id };
-      return;
+      out[priorEntry.outIndex] = { ...out[priorEntry.outIndex], ...toolMessage, id: out[priorEntry.outIndex].id, transport: transport ?? out[priorEntry.outIndex].transport };
+      continue;
     }
     out.push(toolMessage);
-  });
+  }
   return out;
+}
+
+function transportMeta(message: any): ChatMessage["transport"] | undefined {
+  const meta = message?.__boxedagent;
+  return meta && typeof meta.messageId === "string" ? meta : undefined;
+}
+
+function replaceExpandedMessage(current: ChatMessage[], messageId: string, expanded: ChatMessage[]): ChatMessage[] {
+  const start = current.findIndex((item) => item.transport?.messageId === messageId);
+  if (start < 0) return current;
+  let end = start + 1;
+  while (end < current.length && current[end].transport?.messageId === messageId) end++;
+  return [
+    ...current.slice(0, start),
+    ...expanded.map((item, idx) => ({ ...item, id: idx === 0 ? current[start].id : `${current[start].id}-expanded-${idx}`, transport: { ...(item.transport ?? { messageId, truncated: false }), truncated: false } })),
+    ...current.slice(end)
+  ];
 }
 
 function contentParts(content: any): { text: string; thinking: string; tools: Partial<ChatMessage>[] } {
@@ -2063,6 +2120,10 @@ function formatBytes(value: number) {
   if (value >= 1024 * 1024) return `${(value / 1024 / 1024).toFixed(1)}MB`;
   if (value >= 1024) return `${(value / 1024).toFixed(1)}KB`;
   return `${value}B`;
+}
+
+function formatNumber(value: number) {
+  return Math.max(0, Math.floor(value)).toLocaleString();
 }
 
 function attachmentImageSrc(attachment: Extract<ChatAttachment, { kind: "image" }>, boxId?: string): string | undefined {
