@@ -113,7 +113,7 @@ export function App() {
       <div className="app-resizer left" role="separator" aria-label="调整 Boxes 宽度" onPointerDown={(event) => startResize("left", event)} />
       <ChatPane boxId={activeBoxId} sessionId={activeSessionId} />
       <div className="app-resizer right" role="separator" aria-label="调整 Tools 宽度" onPointerDown={(event) => startResize("right", event)} />
-      <RightPanel box={activeBox} onRefresh={refresh} />
+      <RightPanel box={activeBox} boxes={boxes} sessionId={activeSessionId} onRefresh={refresh} />
     </div>
     <div className="layout-controls desktop-only">
       <button type="button" className="icon-button" title={leftVisible ? "隐藏 Boxes" : "显示 Boxes"} onClick={() => setLeftVisible((value) => !value)}>{leftVisible ? <PanelLeftClose size={18} /> : <PanelLeftOpen size={18} />}</button>

@@ -73,6 +73,8 @@ export async function registerSessionRoutes(app: FastifyInstance) {
     return { ok: true };
   });
 
+  app.post("/api/sessions/:sessionId/reload", async (req) => ({ session: await agentManager.reload((req.params as any).sessionId) }));
+
   app.post("/api/sessions/:sessionId/duplicate", async (req) => {
     const body = DuplicateBody.parse(req.body ?? {});
     return { session: await agentManager.duplicateSession((req.params as any).sessionId, body) };
@@ -99,7 +101,11 @@ export async function registerSessionRoutes(app: FastifyInstance) {
 
   app.post("/api/sessions/:sessionId/prompt", async (req) => {
     const body = PromptBody.parse(req.body);
-    const result = await agentManager.prompt((req.params as any).sessionId, body);
+    const sessionId = (req.params as any).sessionId as string;
+    if (body.message.trim() === "/reload" && !body.streamingBehavior && !body.images?.length) {
+      return { ok: true, reloaded: true, session: await agentManager.reload(sessionId) };
+    }
+    const result = await agentManager.prompt(sessionId, body);
     return { ok: true, result };
   });
 

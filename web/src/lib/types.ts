@@ -1,6 +1,19 @@
 export type BoxStatus = "creating" | "starting" | "running" | "stopped" | "paused" | "error" | "deleted";
 export type ThinkingLevel = "off" | "minimal" | "low" | "medium" | "high" | "xhigh";
 
+export type PiExtensionScope = "box" | "workspace";
+
+export interface PiExtensionRecord {
+  name: string;
+  scope: PiExtensionScope;
+  path: string;
+  type: "file" | "directory" | "package" | "path";
+  entrypoint?: string;
+  source?: string;
+  size: number;
+  modifiedAt: string;
+}
+
 export interface PiBoxConfig {
   defaultProvider?: string;
   defaultModel?: string;

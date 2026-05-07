@@ -1,4 +1,4 @@
-import type { AgentSessionRecord, BoxRecord, FileEntry, PiBoxConfig, PiModel, SessionStats, SessionTree, ThinkingLevel } from "./types";
+import type { AgentSessionRecord, BoxRecord, FileEntry, PiBoxConfig, PiExtensionRecord, PiExtensionScope, PiModel, SessionStats, SessionTree, ThinkingLevel } from "./types";
 
 async function request<T>(url: string, init?: RequestInit): Promise<T> {
   const headers = new Headers(init?.headers);
@@ -31,6 +31,18 @@ export const api = {
   boxModels: (boxId: string) => request<{ models: PiModel[] }>(`/api/boxes/${boxId}/models`),
   getPiConfig: (boxId: string) => request<{ pi: PiBoxConfig; env: Record<string, string>; materialized: { piCodingAgentDir: string; settings: Record<string, unknown> } }>(`/api/boxes/${boxId}/pi-config`),
   updatePiConfig: (boxId: string, body: PiBoxConfig & { settingsJsonText?: string; modelsJsonText?: string; env?: Record<string, string> }) => request<{ pi: PiBoxConfig; env: Record<string, string>; materialized: { piCodingAgentDir: string; settings: Record<string, unknown> } }>(`/api/boxes/${boxId}/pi-config`, { method: "PUT", body: JSON.stringify(body) }),
+  listPiExtensions: (boxId: string, cwd = "/workspace") => request<{ extensions: PiExtensionRecord[] }>(`/api/boxes/${boxId}/pi-extensions?cwd=${encodeURIComponent(cwd)}`),
+  installPiExtension: (boxId: string, body: { source: string; name?: string; scope: PiExtensionScope; cwd?: string; overwrite?: boolean }) => request<{ ok: boolean; extension: PiExtensionRecord; message: string }>(`/api/boxes/${boxId}/pi-extensions/install`, { method: "POST", body: JSON.stringify(body) }),
+  uploadPiExtension: async (boxId: string, body: { file: File; name?: string; scope: PiExtensionScope; cwd?: string; overwrite?: boolean }) => {
+    const form = new FormData();
+    form.append("file", body.file);
+    const params = new URLSearchParams({ scope: body.scope, cwd: body.cwd ?? "/workspace", overwrite: String(Boolean(body.overwrite)) });
+    if (body.name) params.set("name", body.name);
+    return request<{ ok: boolean; extension: PiExtensionRecord; message: string }>(`/api/boxes/${boxId}/pi-extensions/upload?${params.toString()}`, { method: "POST", body: form });
+  },
+  deletePiExtension: (boxId: string, scope: PiExtensionScope, name: string, cwd = "/workspace") => request<{ ok: boolean; message: string }>(`/api/boxes/${boxId}/pi-extensions/${scope}/${encodeURIComponent(name)}?cwd=${encodeURIComponent(cwd)}`, { method: "DELETE" }),
+  migratePiExtensions: (boxId: string, body: { targetBoxIds: string[]; names?: string[]; sourceScope: PiExtensionScope; targetScope: PiExtensionScope; sourceCwd?: string; targetCwd?: string; overwrite?: boolean }) => request<{ ok: boolean; migrated: Array<{ targetBoxId: string; extensions: PiExtensionRecord[] }>; message: string }>(`/api/boxes/${boxId}/pi-extensions/migrate`, { method: "POST", body: JSON.stringify(body) }),
+  piInstallPackage: (boxId: string, body: { source: string; scope: PiExtensionScope; cwd?: string }) => request<{ ok: boolean; stdout: string; stderr: string; message: string }>(`/api/boxes/${boxId}/pi-extensions/pi-install`, { method: "POST", body: JSON.stringify(body) }),
 
   getCurrentSession: () => request<{ sessionId?: string; activeSessionId?: string; boxId?: string; session?: AgentSessionRecord }>("/api/current-session"),
   setCurrentSession: (sessionId?: string) => request<{ ok: boolean; sessionId?: string; activeSessionId?: string; boxId?: string; session?: AgentSessionRecord }>("/api/current-session", { method: sessionId ? "PUT" : "DELETE", body: sessionId ? JSON.stringify({ sessionId }) : undefined }),
@@ -38,6 +50,7 @@ export const api = {
   createSession: (body: { boxId: string; name?: string; cwd?: string; provider?: string; model?: string; thinkingLevel?: ThinkingLevel; autostart?: boolean }) => request<AgentSessionRecord>("/api/sessions", { method: "POST", body: JSON.stringify(body) }),
   startSession: (id: string) => request<AgentSessionRecord>(`/api/sessions/${id}/start`, { method: "POST" }),
   stopSession: (id: string) => request<AgentSessionRecord>(`/api/sessions/${id}/stop`, { method: "POST" }),
+  reloadSession: (id: string) => request<{ session: AgentSessionRecord }>(`/api/sessions/${id}/reload`, { method: "POST" }),
   updateSession: (id: string, body: Partial<Pick<AgentSessionRecord, "name" | "cwd" | "model" | "provider" | "thinkingLevel">>) => request<AgentSessionRecord>(`/api/sessions/${id}`, { method: "PATCH", body: JSON.stringify(body) }),
   deleteSession: (id: string) => request<{ ok: boolean }>(`/api/sessions/${id}`, { method: "DELETE" }),
   abortSession: (id: string) => request<{ ok: boolean }>(`/api/sessions/${id}/abort`, { method: "POST" }),

@@ -47,6 +47,19 @@ export class AgentManager {
     return runtime.abort();
   }
 
+  async reload(id: string): Promise<AgentSessionRecord> {
+    const session = store.getSession(id);
+    if (session.status === "working") throw conflict("Cannot reload session while agent is working");
+    const runtime = this.runtimes.get(id);
+    if (runtime) {
+      await runtime.stop();
+      this.runtimes.delete(id);
+    }
+    const reloaded = await this.start(id);
+    wsHub.publishBox(session.boxId, { type: "sessions_changed" });
+    return reloaded;
+  }
+
   async duplicateSession(id: string, input: { name?: string; autostart?: boolean } = {}): Promise<AgentSessionRecord> {
     const source = store.getSession(id);
     const now = new Date().toISOString();

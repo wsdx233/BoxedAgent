@@ -39,7 +39,13 @@ export async function materializeBoxPiConfig(box: BoxRecord): Promise<void> {
   await fs.ensureDir(projectPiDir);
   await fs.ensureDir(path.join(box.workspacePath, ".pi-sessions"));
 
-  await fs.writeJson(path.join(agentDir, "settings.json"), mergePiSettings(pi), { spaces: 2 });
+  const settingsPath = path.join(agentDir, "settings.json");
+  const existingSettings = await fs.readJson(settingsPath).catch(() => ({})) as Record<string, unknown>;
+  const nextSettings = mergePiSettings(pi);
+  for (const key of ["packages", "extensions", "skills", "prompts", "themes", "npmCommand"] as const) {
+    if (nextSettings[key] === undefined && existingSettings[key] !== undefined) nextSettings[key] = existingSettings[key];
+  }
+  await fs.writeJson(settingsPath, nextSettings, { spaces: 2 });
 
   if (pi.modelsJson && Object.keys(pi.modelsJson).length > 0) {
     await fs.writeJson(path.join(agentDir, "models.json"), pi.modelsJson, { spaces: 2 });

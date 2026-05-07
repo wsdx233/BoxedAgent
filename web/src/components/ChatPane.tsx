@@ -354,6 +354,19 @@ export function ChatPane({ boxId, sessionId }: { boxId?: string; sessionId?: str
     e?.preventDefault();
     if (!sessionId || !boxId || !canSend) return;
     const message = text.trimEnd();
+    if (message.trim() === "/reload" && images.length === 0 && fileAttachments.length === 0) {
+      try {
+        appendMessage(sessionId, { id: newId(), role: "user", text: message, timestamp: Date.now() });
+        setText("");
+        const res = await api.reloadSession(sessionId);
+        patchSessionLocal(res.session);
+        appendMessage(sessionId, { id: newId(), role: "system", text: "已 reload 当前 pi session：extensions / skills / prompts / themes 已重新加载。", timestamp: Date.now() });
+        void syncRuntimeState();
+      } catch (err) {
+        appendMessage(sessionId, { id: newId(), role: "system", text: `Reload 失败：${err instanceof Error ? err.message : String(err)}`, timestamp: Date.now() });
+      }
+      return;
+    }
     const attachments: ChatAttachment[] = [
       ...images.map((img) => ({ kind: "image" as const, name: img.name, mimeType: img.mimeType, data: img.data, path: img.path, size: img.size })),
       ...fileAttachments

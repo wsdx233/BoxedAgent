@@ -12,6 +12,7 @@ import { registerBoxRoutes } from "./routes/boxes.js";
 import { registerSessionRoutes } from "./routes/sessions.js";
 import { registerFileRoutes } from "./routes/files.js";
 import { registerPiConfigRoutes } from "./routes/pi-config.js";
+import { registerPiExtensionRoutes } from "./routes/pi-extensions.js";
 import { registerEventWs } from "./ws/events.js";
 import { registerTerminalWs } from "./ws/terminal.js";
 import { registerCodeServerProxy } from "./routes/codeserver.js";
@@ -51,6 +52,7 @@ export async function buildServer() {
   await registerSessionRoutes(app);
   await registerFileRoutes(app);
   await registerPiConfigRoutes(app);
+  await registerPiExtensionRoutes(app);
   await registerCodeServerProxy(app);
 
   if (await fs.pathExists(paths.webDistDir)) {
