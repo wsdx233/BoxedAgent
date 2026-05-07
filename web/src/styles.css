@@ -214,8 +214,8 @@ hr { border: 0; border-top: 1px solid var(--border); margin: 14px 0; }
 .status-dot { position: relative; width: 10px; height: 10px; border-radius: 50%; flex: 0 0 auto; }
 .status-dot.running { background: #4ade80; box-shadow: 0 0 0 3px rgba(74,222,128,.12); }
 .status-dot.stopped { background: #7b7482; box-shadow: 0 0 0 3px rgba(123,116,130,.12); }
-.status-dot.working { background: #60a5fa; box-shadow: 0 0 0 0 rgba(96,165,250,.55); animation: dotPulseBlue 1.35s ease-out infinite; }
-@keyframes dotPulseBlue { 0% { box-shadow: 0 0 0 0 rgba(96,165,250,.58); } 70%, 100% { box-shadow: 0 0 0 9px rgba(96,165,250,0); } }
+.status-dot.working { background: #60a5fa; box-shadow: 0 0 0 3px rgba(96,165,250,.18); animation: dotPulseBlue 1.8s steps(3, end) infinite; }
+@keyframes dotPulseBlue { 0% { opacity: 1; transform: scale(1); } 50% { opacity: .55; transform: scale(.82); } 100% { opacity: 1; transform: scale(1); } }
 .app-status { position: fixed; left: 18px; bottom: 10px; right: 18px; pointer-events: none; color: color-mix(in srgb, var(--muted) 76%, transparent); }
 .auth-logout { position: fixed; right: 18px; bottom: 10px; z-index: 40; min-height: 30px; padding: 5px 10px; font-size: 12px; background: color-mix(in srgb, var(--md-sys-color-surface-container-high) 94%, #000); color: var(--muted); border-color: var(--border); }
 .auth-page { min-height: 100vh; display: grid; place-items: center; padding: 24px; background: radial-gradient(circle at 50% 0, rgba(208,188,255,.16), transparent 34%), var(--bg); }
@@ -237,7 +237,7 @@ hr { border: 0; border-top: 1px solid var(--border); margin: 14px 0; }
 .chat-topbar-state.working { color: #bfdbfe; }
 .chat-topbar-state.running { color: var(--green); }
 .live-dot { position: relative; width: 10px; height: 10px; border-radius: 50%; background: #4ade80; box-shadow: 0 0 0 3px rgba(74,222,128,.12); }
-.chat-topbar-state.working .live-dot { background: #60a5fa; box-shadow: 0 0 0 0 rgba(96,165,250,.55); animation: dotPulseBlue 1.35s ease-out infinite; }
+.chat-topbar-state.working .live-dot { background: #60a5fa; box-shadow: 0 0 0 3px rgba(96,165,250,.18); animation: dotPulseBlue 1.8s steps(3, end) infinite; }
 .runtime-strip { display: flex; gap: 7px; flex-wrap: wrap; margin-top: 7px; }
 .runtime-chip { display: inline-flex; align-items: center; max-width: min(100%, 520px); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; border-radius: 999px; padding: 4px 8px; border: 1px solid color-mix(in srgb, var(--border) 80%, transparent); background: color-mix(in srgb, var(--md-sys-color-surface-container-lowest) 68%, transparent); color: var(--muted); font: 11px/1.2 "JetBrains Mono", "Cascadia Mono", ui-monospace, monospace; }
 .context-chip { color: var(--md-sys-color-on-primary-container); background: color-mix(in srgb, var(--md-sys-color-primary-container) 24%, transparent); border-color: color-mix(in srgb, var(--accent) 24%, var(--border)); }
@@ -441,8 +441,9 @@ hr { border: 0; border-top: 1px solid var(--border); margin: 14px 0; }
 .tool-mini-details summary { padding: 8px 10px; color: var(--muted); font-size: 12px; }
 .tool-mini-details .code-preview { border: 0; border-top: 1px solid var(--border); border-radius: 0; }
 .assistant-thinking { width: min(100%, 820px); margin: 4px auto 18px; color: var(--muted); display: flex; gap: 8px; align-items: center; font-size: 13px; }
-.spin { animation: spin 1s linear infinite; }
+.spin { animation: spin 1.2s steps(12, end) infinite; will-change: transform; }
 @keyframes spin { to { transform: rotate(360deg); } }
+.streaming-markdown { white-space: pre-wrap; overflow-wrap: anywhere; }
 .composer { margin: 0 clamp(14px, 4vw, 56px) 16px; border: 1px solid var(--border); border-radius: 28px; padding: 10px; display: grid; gap: 8px; background: color-mix(in srgb, var(--md-sys-color-surface-container-high) 94%, transparent); box-shadow: var(--shadow-2); }
 .composer textarea { min-height: 78px; max-height: 260px; resize: none; border: 0; background: transparent; box-shadow: none; padding: 10px 12px; font-size: 15px; }
 .composer textarea:focus { box-shadow: none; }

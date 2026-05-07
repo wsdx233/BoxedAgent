@@ -15,9 +15,11 @@ interface AppState {
   setActiveBox: (id?: string) => void;
   setActiveSession: (id?: string) => void;
   appendMessage: (sessionId: string, msg: ChatMessage) => void;
+  appendAssistantDelta: (sessionId: string, delta: { text?: string; thinking?: string }) => void;
   updateLastAssistant: (sessionId: string, delta: string) => void;
   updateLastAssistantThinking: (sessionId: string, delta: string) => void;
   upsertToolMessage: (sessionId: string, toolCallId: string, patch: Partial<ChatMessage>) => void;
+  upsertToolMessages: (sessionId: string, items: Array<{ toolCallId: string; patch: Partial<ChatMessage> }>) => void;
   setSessionMessages: (sessionId: string, messages: ChatMessage[]) => void;
   setComposerDraft: (sessionId: string, draft?: string) => void;
   clearMessages: (sessionId: string) => void;
@@ -44,28 +46,11 @@ export const useAppStore = create<AppState>((set) => ({
   setActiveBox: (id) => set({ activeBoxId: id, activeSessionId: undefined }),
   setActiveSession: (id) => set({ activeSessionId: id }),
   appendMessage: (sessionId, msg) => set((s) => ({ messagesBySession: { ...s.messagesBySession, [sessionId]: [...(s.messagesBySession[sessionId] ?? []), msg] } })),
-  updateLastAssistant: (sessionId, delta) => set((s) => {
-    const list = [...(s.messagesBySession[sessionId] ?? [])];
-    const last = list[list.length - 1];
-    if (last?.role === "assistant") list[list.length - 1] = { ...last, text: last.text + delta };
-    else list.push({ id: newId(), role: "assistant", text: delta, timestamp: Date.now() });
-    return { messagesBySession: { ...s.messagesBySession, [sessionId]: list } };
-  }),
-  updateLastAssistantThinking: (sessionId, delta) => set((s) => {
-    const list = [...(s.messagesBySession[sessionId] ?? [])];
-    const last = list[list.length - 1];
-    if (last?.role === "assistant") list[list.length - 1] = { ...last, thinking: `${last.thinking ?? ""}${delta}` };
-    else list.push({ id: newId(), role: "assistant", text: "", thinking: delta, timestamp: Date.now() });
-    return { messagesBySession: { ...s.messagesBySession, [sessionId]: list } };
-  }),
-  upsertToolMessage: (sessionId, toolCallId, patch) => set((s) => {
-    const list = [...(s.messagesBySession[sessionId] ?? [])];
-    const cleanPatch = Object.fromEntries(Object.entries(patch).filter(([, value]) => value !== undefined)) as Partial<ChatMessage>;
-    const idx = list.findIndex((m) => m.role === "tool" && m.toolCallId === toolCallId);
-    if (idx >= 0) list[idx] = { ...list[idx], ...cleanPatch, timestamp: Date.now() };
-    else list.push({ id: newId(), role: "tool", text: "", toolCallId, timestamp: Date.now(), ...cleanPatch });
-    return { messagesBySession: { ...s.messagesBySession, [sessionId]: list } };
-  }),
+  appendAssistantDelta: (sessionId, delta) => set((s) => ({ messagesBySession: { ...s.messagesBySession, [sessionId]: appendAssistantDeltaToList(s.messagesBySession[sessionId] ?? [], delta) } })),
+  updateLastAssistant: (sessionId, delta) => set((s) => ({ messagesBySession: { ...s.messagesBySession, [sessionId]: appendAssistantDeltaToList(s.messagesBySession[sessionId] ?? [], { text: delta }) } })),
+  updateLastAssistantThinking: (sessionId, delta) => set((s) => ({ messagesBySession: { ...s.messagesBySession, [sessionId]: appendAssistantDeltaToList(s.messagesBySession[sessionId] ?? [], { thinking: delta }) } })),
+  upsertToolMessage: (sessionId, toolCallId, patch) => set((s) => ({ messagesBySession: { ...s.messagesBySession, [sessionId]: upsertToolPatchesIntoList(s.messagesBySession[sessionId] ?? [], [{ toolCallId, patch }]) } })),
+  upsertToolMessages: (sessionId, items) => set((s) => ({ messagesBySession: { ...s.messagesBySession, [sessionId]: upsertToolPatchesIntoList(s.messagesBySession[sessionId] ?? [], items) } })),
   setSessionMessages: (sessionId, messages) => set((s) => ({ messagesBySession: { ...s.messagesBySession, [sessionId]: messages } })),
   setComposerDraft: (sessionId, draft) => set((s) => {
     const drafts = { ...s.composerDrafts };
@@ -75,3 +60,38 @@ export const useAppStore = create<AppState>((set) => ({
   }),
   clearMessages: (sessionId) => set((s) => ({ messagesBySession: { ...s.messagesBySession, [sessionId]: [] } }))
 }));
+
+function appendAssistantDeltaToList(list: ChatMessage[], delta: { text?: string; thinking?: string }): ChatMessage[] {
+  const next = [...list];
+  const last = next[next.length - 1];
+  if (last?.role === "assistant") {
+    next[next.length - 1] = {
+      ...last,
+      text: `${last.text}${delta.text ?? ""}`,
+      thinking: delta.thinking === undefined ? last.thinking : `${last.thinking ?? ""}${delta.thinking}`
+    };
+  } else {
+    next.push({ id: newId(), role: "assistant", text: delta.text ?? "", thinking: delta.thinking, timestamp: Date.now() });
+  }
+  return next;
+}
+
+function upsertToolPatchesIntoList(list: ChatMessage[], items: Array<{ toolCallId: string; patch: Partial<ChatMessage> }>): ChatMessage[] {
+  if (!items.length) return list;
+  const next = [...list];
+  const indexById = new Map<string, number>();
+  next.forEach((message, index) => {
+    if (message.role === "tool" && message.toolCallId) indexById.set(message.toolCallId, index);
+  });
+  const now = Date.now();
+  for (const item of items) {
+    const cleanPatch = Object.fromEntries(Object.entries(item.patch).filter(([, value]) => value !== undefined)) as Partial<ChatMessage>;
+    const idx = indexById.get(item.toolCallId);
+    if (idx !== undefined) next[idx] = { ...next[idx], ...cleanPatch, timestamp: now };
+    else {
+      indexById.set(item.toolCallId, next.length);
+      next.push({ id: newId(), role: "tool", text: "", toolCallId: item.toolCallId, timestamp: now, ...cleanPatch });
+    }
+  }
+  return next;
+}

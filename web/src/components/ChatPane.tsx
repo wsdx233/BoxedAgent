@@ -57,6 +57,17 @@ interface QueueState {
   followUp: string[];
 }
 
+type ToolPatch = { toolCallId: string; patch: Partial<ChatMessage> };
+
+interface StreamBufferState {
+  sessionId?: string;
+  text: string;
+  thinking: string;
+  toolPatches: ToolPatch[];
+  frame?: number;
+  timeout?: number;
+}
+
 type SendMode = "normal" | "steer" | "followUp";
 type MenuKey = "send" | "thinking" | "model" | "compact";
 
@@ -84,9 +95,8 @@ export function ChatPane({ boxId, sessionId }: { boxId?: string; sessionId?: str
     sessions,
     messagesBySession,
     appendMessage,
-    updateLastAssistant,
-    updateLastAssistantThinking,
-    upsertToolMessage,
+    appendAssistantDelta,
+    upsertToolMessages,
     setSessionMessages,
     setComposerDraft,
     setSessions
@@ -122,6 +132,7 @@ export function ChatPane({ boxId, sessionId }: { boxId?: string; sessionId?: str
   const stickToBottomRef = useRef(true);
   const pinnedScrollRafRef = useRef<number>();
   const pinnedScrollTimeoutRef = useRef<number>();
+  const streamBufferRef = useRef<StreamBufferState>({ text: "", thinking: "", toolPatches: [] });
   const session = sessions.find((s) => s.id === sessionId);
   const messages = sessionId ? messagesBySession[sessionId] ?? [] : [];
   const canSend = text.trim().length > 0 || images.length > 0 || fileAttachments.length > 0;
@@ -137,8 +148,12 @@ export function ChatPane({ boxId, sessionId }: { boxId?: string; sessionId?: str
       : models;
     return filtered.slice(0, 180);
   }, [models, modelSearch]);
-  const renderedMessages = useMemo(() => messages.map((m, idx) => <div key={m.id} id={messageDomId(m.id)} className="message-anchor-wrap"><MemoMessageBubble message={m} isLatest={idx === messages.length - 1} boxId={boxId} isExpanding={Boolean(m.transport?.messageId && expandingMessageIds.has(m.transport.messageId))} onExpand={expandMessage} /></div>), [messages, boxId, expandingMessageIds]);
-  const userProgressNodes = useMemo(() => messages.filter((m) => m.role === "user").map((m, idx) => ({ id: m.id, label: `#${idx + 1}`, text: m.text || attachmentSummary(m.attachments ?? []) })), [messages]);
+  const renderedMessages = useMemo(() => messages.map((m, idx) => {
+    const isLatest = idx === messages.length - 1;
+    return <div key={m.id} id={messageDomId(m.id)} className="message-anchor-wrap"><MemoMessageBubble message={m} isLatest={isLatest} isStreaming={turnActive && isLatest} boxId={boxId} isExpanding={Boolean(m.transport?.messageId && expandingMessageIds.has(m.transport.messageId))} onExpand={expandMessage} /></div>;
+  }), [messages, boxId, expandingMessageIds, turnActive]);
+  const userProgressKey = messages.filter((m) => m.role === "user").map((m) => `${m.id}:${m.text.length}:${m.attachments?.length ?? 0}`).join("|");
+  const userProgressNodes = useMemo(() => messages.filter((m) => m.role === "user").map((m, idx) => ({ id: m.id, label: `#${idx + 1}`, text: m.text || attachmentSummary(m.attachments ?? []) })), [userProgressKey]);
 
   useEffect(() => {
     if (!stickToBottomRef.current) return;
@@ -267,6 +282,7 @@ export function ChatPane({ boxId, sessionId }: { boxId?: string; sessionId?: str
         setTurnActive(true);
       }
       if (e.type === "agent_end" || e.type === "turn_end" || e.type === "message_end") {
+        flushStreamBuffer();
         expectingTurnRef.current = false;
         setTurnActive(false);
         void refreshSessionStats(sessionId);
@@ -277,30 +293,17 @@ export function ChatPane({ boxId, sessionId }: { boxId?: string; sessionId?: str
           expectingTurnRef.current = true;
           setTurnActive(true);
         }
-        if (delta?.type === "text_delta") updateLastAssistant(sessionId, String(delta.delta ?? ""));
-        if (delta?.type === "thinking_delta") updateLastAssistantThinking(sessionId, String(delta.delta ?? ""));
-        if (delta?.type === "toolcall_start") {
+        if (delta?.type === "text_delta") enqueueAssistantDelta(sessionId, { text: String(delta.delta ?? "") });
+        if (delta?.type === "thinking_delta") enqueueAssistantDelta(sessionId, { thinking: String(delta.delta ?? "") });
+        if (delta?.type === "toolcall_start" || delta?.type === "toolcall_delta" || delta?.type === "toolcall_end") {
           const tool = toolCallFromDelta(delta);
           const toolCallId = tool.id ?? String(delta.id ?? `${delta.contentIndex ?? "tool"}`);
           const patch: Partial<ChatMessage> = { toolCallId, toolName: tool.name ?? "tool", toolStatus: "pending" };
           if (tool.args !== undefined) patch.toolArgs = tool.args;
-          upsertToolMessage(sessionId, toolCallId, patch);
-        }
-        if (delta?.type === "toolcall_delta") {
-          const tool = toolCallFromDelta(delta);
-          const toolCallId = tool.id ?? String(delta.id ?? `${delta.contentIndex ?? "tool"}`);
-          const patch: Partial<ChatMessage> = { toolCallId, toolName: tool.name ?? "tool", toolStatus: "pending" };
-          if (tool.args !== undefined) patch.toolArgs = tool.args;
-          upsertToolMessage(sessionId, toolCallId, patch);
-        }
-        if (delta?.type === "toolcall_end") {
-          const tool = toolCallFromDelta(delta);
-          const toolCallId = tool.id ?? String(delta.id ?? `${delta.contentIndex ?? "tool"}`);
-          const patch: Partial<ChatMessage> = { toolCallId, toolName: tool.name ?? "tool", toolStatus: "pending" };
-          if (tool.args !== undefined) patch.toolArgs = tool.args;
-          upsertToolMessage(sessionId, toolCallId, patch);
+          enqueueToolPatch(sessionId, toolCallId, patch);
         }
         if (delta?.type === "done" || delta?.type === "error") {
+          flushStreamBuffer();
           expectingTurnRef.current = false;
           setTurnActive(false);
           void refreshSessionStats(sessionId);
@@ -311,17 +314,17 @@ export function ChatPane({ boxId, sessionId }: { boxId?: string; sessionId?: str
         setTurnActive(true);
         const patch: Partial<ChatMessage> = { toolName: e.toolName, toolStatus: "running" };
         if (e.args !== undefined) patch.toolArgs = e.args;
-        upsertToolMessage(sessionId, e.toolCallId ?? `${e.toolName}-${Date.now()}`, patch);
+        enqueueToolPatch(sessionId, e.toolCallId ?? `${e.toolName}-${Date.now()}`, patch);
       }
       if (e.type === "tool_execution_update") {
         const patch: Partial<ChatMessage> = { toolName: e.toolName, toolResult: resultToText(e.partialResult), toolResultMeta: toolResultMeta(e.partialResult), toolStatus: "running" };
         if (e.args !== undefined) patch.toolArgs = e.args;
-        upsertToolMessage(sessionId, e.toolCallId ?? `${e.toolName}-${Date.now()}`, patch);
+        enqueueToolPatch(sessionId, e.toolCallId ?? `${e.toolName}-${Date.now()}`, patch);
       }
       if (e.type === "tool_execution_end") {
         const patch: Partial<ChatMessage> = { toolName: e.toolName, toolResult: resultToText(e.result), toolResultMeta: toolResultMeta(e.result), toolStatus: e.isError ? "error" : "done" };
         if (e.args !== undefined) patch.toolArgs = e.args;
-        upsertToolMessage(sessionId, e.toolCallId ?? `${e.toolName}-${Date.now()}`, patch);
+        enqueueToolPatch(sessionId, e.toolCallId ?? `${e.toolName}-${Date.now()}`, patch);
       }
       if (e.type === "queue_update") {
         setQueue({ steering: e.steering ?? [], followUp: e.followUp ?? [] });
@@ -332,6 +335,7 @@ export function ChatPane({ boxId, sessionId }: { boxId?: string; sessionId?: str
         appendMessage(sessionId, { id: newId(), role: "system", text: `正在压缩上下文：${e.reason ?? "manual"}`, timestamp: Date.now() });
       }
       if (e.type === "compaction_end") {
+        flushStreamBuffer();
         expectingTurnRef.current = false;
         setTurnActive(false);
         appendMessage(sessionId, { id: newId(), role: "system", text: e.aborted ? "上下文压缩已取消" : `上下文压缩完成${e.willRetry ? "，将自动重试" : ""}${e.errorMessage ? `：${e.errorMessage}` : ""}`, timestamp: Date.now() });
@@ -347,8 +351,8 @@ export function ChatPane({ boxId, sessionId }: { boxId?: string; sessionId?: str
       if (!cancelled) setMessagesLoading(false);
     });
     void refreshSessionStats(sessionId);
-    return () => { cancelled = true; closeWebSocketQuietly(ws); };
-  }, [sessionId, appendMessage, setSessionMessages, updateLastAssistant, updateLastAssistantThinking, upsertToolMessage]);
+    return () => { cancelled = true; flushStreamBuffer(); closeWebSocketQuietly(ws); };
+  }, [sessionId, appendMessage, setSessionMessages, appendAssistantDelta, upsertToolMessages]);
 
   async function submit(e?: FormEvent, modeOverride?: SendMode) {
     e?.preventDefault();
@@ -535,6 +539,55 @@ export function ChatPane({ boxId, sessionId }: { boxId?: string; sessionId?: str
         return next;
       });
     }
+  }
+
+  function enqueueAssistantDelta(targetSessionId: string, delta: { text?: string; thinking?: string }) {
+    const buffer = prepareStreamBuffer(targetSessionId);
+    buffer.text += delta.text ?? "";
+    buffer.thinking += delta.thinking ?? "";
+    scheduleStreamBufferFlush();
+  }
+
+  function enqueueToolPatch(targetSessionId: string, toolCallId: string, patch: Partial<ChatMessage>) {
+    const buffer = prepareStreamBuffer(targetSessionId);
+    buffer.toolPatches.push({ toolCallId, patch });
+    scheduleStreamBufferFlush();
+  }
+
+  function prepareStreamBuffer(targetSessionId: string): StreamBufferState {
+    const buffer = streamBufferRef.current;
+    if (buffer.sessionId && buffer.sessionId !== targetSessionId) flushStreamBuffer();
+    buffer.sessionId = targetSessionId;
+    return buffer;
+  }
+
+  function scheduleStreamBufferFlush() {
+    const buffer = streamBufferRef.current;
+    if (buffer.frame !== undefined || buffer.timeout !== undefined) return;
+    buffer.frame = window.requestAnimationFrame(() => flushStreamBuffer());
+    buffer.timeout = window.setTimeout(() => flushStreamBuffer(), 80);
+  }
+
+  function flushStreamBuffer() {
+    const buffer = streamBufferRef.current;
+    if (buffer.frame !== undefined) {
+      window.cancelAnimationFrame(buffer.frame);
+      buffer.frame = undefined;
+    }
+    if (buffer.timeout !== undefined) {
+      window.clearTimeout(buffer.timeout);
+      buffer.timeout = undefined;
+    }
+    const targetSessionId = buffer.sessionId;
+    if (!targetSessionId) return;
+    const text = buffer.text;
+    const thinking = buffer.thinking;
+    const toolPatches = buffer.toolPatches;
+    buffer.text = "";
+    buffer.thinking = "";
+    buffer.toolPatches = [];
+    if (text || thinking) appendAssistantDelta(targetSessionId, { text, thinking });
+    if (toolPatches.length) upsertToolMessages(targetSessionId, coalesceToolPatches(toolPatches));
   }
 
   function patchSessionLocal(patch: Partial<AgentSessionRecord>) {
@@ -840,6 +893,12 @@ export function ChatPane({ boxId, sessionId }: { boxId?: string; sessionId?: str
   </div>;
 }
 
+function coalesceToolPatches(items: ToolPatch[]): ToolPatch[] {
+  const byId = new Map<string, Partial<ChatMessage>>();
+  for (const item of items) byId.set(item.toolCallId, { ...(byId.get(item.toolCallId) ?? {}), ...item.patch });
+  return Array.from(byId, ([toolCallId, patch]) => ({ toolCallId, patch }));
+}
+
 function ControlMenuButton({ icon, label, active, onClick }: { icon: ReactNode; label: string; active?: boolean; onClick: () => void }) {
   return <button type="button" className={`control-chip ${active ? "active" : ""}`} onClick={onClick}>{icon}<span>{label}</span><ChevronDown size={14} /></button>;
 }
@@ -869,14 +928,14 @@ function EmptyChat({ title, subtitle }: { title: string; subtitle: string }) {
   </div>;
 }
 
-function MessageBubble({ message, isLatest, boxId, isExpanding, onExpand }: { message: ChatMessage; isLatest: boolean; boxId?: string; isExpanding?: boolean; onExpand?: (messageId: string) => void }) {
+function MessageBubble({ message, isLatest, isStreaming, boxId, isExpanding, onExpand }: { message: ChatMessage; isLatest: boolean; isStreaming?: boolean; boxId?: string; isExpanding?: boolean; onExpand?: (messageId: string) => void }) {
   const truncation = message.transport?.truncated ? message.transport : undefined;
   if (message.role === "tool") return <ToolCard message={message} isLatest={isLatest} isExpanding={isExpanding} onExpand={onExpand} />;
   if (message.role === "system") return <div className="system-line"><CircleAlert size={14} /> <MarkdownText text={message.text} />{truncation && <TruncationNotice meta={truncation} loading={isExpanding} onExpand={onExpand} />}</div>;
   return <article className={`message-row ${message.role}`}>
     <div className={`message ${message.role}`}>
       {message.thinking && <ThinkingBlock text={message.thinking} autoOpen={isLatest} />}
-      {message.text ? message.role === "user" ? <UserMessageText text={message.text} /> : <MarkdownText text={message.text} /> : message.thinking ? null : <span className="muted">…</span>}
+      {message.text ? message.role === "user" ? <UserMessageText text={message.text} /> : <MarkdownText text={message.text} streaming={isStreaming} /> : message.thinking ? null : <span className="muted">…</span>}
       {message.attachments?.length ? <AttachmentGallery attachments={message.attachments} boxId={boxId} /> : null}
       {truncation && <TruncationNotice meta={truncation} loading={isExpanding} onExpand={onExpand} />}
     </div>
@@ -1539,8 +1598,14 @@ function codePreviewSuffix(meta: ToolResultMeta | undefined, actualLines: number
   return parts.length ? `… ${Array.from(new Set(parts)).join("；")}` : "";
 }
 
-function MarkdownText({ text }: { text: string }) {
+function MarkdownText({ text, streaming = false }: { text: string; streaming?: boolean }) {
+  const useFastPath = streaming && text.length > 1800;
+  if (useFastPath) return <div className="markdown-body streaming-markdown"><PlainStreamingText text={text} /></div>;
   return <div className="markdown-body"><ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeHighlight]} components={{ pre: MarkdownPre }}>{text}</ReactMarkdown></div>;
+}
+
+function PlainStreamingText({ text }: { text: string }) {
+  return <>{text}</>;
 }
 
 function MarkdownPre({ children, node: _node, ...props }: any) {
