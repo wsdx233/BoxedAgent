@@ -1,12 +1,13 @@
 import { StringDecoder } from "node:string_decoder";
 import { PassThrough } from "node:stream";
 import type { Exec } from "dockerode";
+import fs from "fs-extra";
 import type { BoxRecord, AgentSessionRecord, AgentSessionStatus, PiModel, SessionStats, ThinkingLevel } from "../core/types.js";
 import { dockerService } from "../docker/docker-service.js";
 import { store } from "../core/store.js";
 import { wsHub } from "../ws/hub.js";
 import { conflict } from "../core/errors.js";
-import { piRuntimeEnv } from "./pi-config.js";
+import { hostPathForContainerWorkspacePath, piRuntimeEnv } from "./pi-config.js";
 import { attachMessageMeta, findSessionMessageById, truncateSessionMessages } from "./message-truncation.js";
 
 interface PendingRequest {
@@ -54,6 +55,7 @@ export class AgentRuntime {
 
   async start(): Promise<void> {
     if (this.stream && !this.stopped) return;
+    this.syncRecordFromStore();
     this.stopped = false;
     this.recentStderr = "";
     const initialStatus: AgentSessionStatus = this.workRequested ? "working" : "starting";
@@ -247,16 +249,48 @@ export class AgentRuntime {
 
   private async refreshSessionState() {
     const state = await this.send({ type: "get_state" }, 30_000) as any;
-    await store.patchSession(this.record.id, {
-      sessionFile: state?.sessionFile,
+    const nextSessionFile = await this.sessionFilePatchValue(state?.sessionFile);
+    const patch: Partial<AgentSessionRecord> = {
       provider: modelProvider(state?.model) ?? this.record.provider,
       model: state?.model?.id ?? this.record.model,
       thinkingLevel: state?.thinkingLevel ?? this.record.thinkingLevel,
       autoCompactionEnabled: typeof state?.autoCompactionEnabled === "boolean" ? state.autoCompactionEnabled : this.record.autoCompactionEnabled,
       cwd: normalizeSessionCwd(this.record.cwd),
       lastActiveAt: new Date().toISOString()
+    };
+    if (nextSessionFile) patch.sessionFile = nextSessionFile;
+    if (state?.sessionName) patch.name = state.sessionName;
+    this.record = await store.patchSession(this.record.id, patch);
+  }
+
+  private syncRecordFromStore() {
+    this.record = store.getSession(this.record.id);
+    this.box = store.getBox(this.record.boxId);
+  }
+
+  private async sessionFilePatchValue(value: unknown): Promise<string | undefined> {
+    const nextSessionFile = typeof value === "string" ? value.trim() : "";
+    if (!nextSessionFile) return undefined;
+    const currentSessionFile = this.record.sessionFile?.trim();
+    if (!currentSessionFile) return nextSessionFile;
+    if (normalizeSessionFile(nextSessionFile) === normalizeSessionFile(currentSessionFile)) return nextSessionFile;
+
+    const [currentExists, nextExists] = await Promise.all([
+      this.sessionFileExists(currentSessionFile),
+      this.sessionFileExists(nextSessionFile)
+    ]);
+    if (nextExists || !currentExists) return nextSessionFile;
+
+    wsHub.publishSession(this.record.id, {
+      type: "agent_warning",
+      warning: `pi returned a new session file that does not exist yet (${nextSessionFile}); keeping existing history file (${currentSessionFile}).`
     });
-    if (state?.sessionName) await store.patchSession(this.record.id, { name: state.sessionName });
+    return undefined;
+  }
+
+  private async sessionFileExists(containerPath: string): Promise<boolean> {
+    const hostPath = hostPathForContainerWorkspacePath(this.box, containerPath);
+    return Boolean(hostPath && await fs.pathExists(hostPath));
   }
 
   private send(command: Record<string, unknown>, timeoutMs = 120_000): Promise<unknown> {
@@ -409,6 +443,10 @@ function normalizeSessionCwd(cwd?: string): string {
   const value = cwd?.trim() || "/workspace";
   if (value === "/workspace" || value.startsWith("/workspace/")) return value.replace(/\/+$/, "") || "/workspace";
   return "/workspace";
+}
+
+function normalizeSessionFile(value: string): string {
+  return value.replace(/\\/g, "/").replace(/\/+/g, "/").replace(/\/$/, "");
 }
 
 function cwdToWorkspaceRel(cwd?: string): string {
