@@ -68,6 +68,13 @@ interface StreamBufferState {
   timeout?: number;
 }
 
+interface RuntimeOutputBufferState {
+  sessionId?: string;
+  chunks: Array<{ source: "stderr" | "raw"; text: string }>;
+  frame?: number;
+  timeout?: number;
+}
+
 type SendMode = "normal" | "steer" | "followUp";
 type MenuKey = "send" | "thinking" | "model" | "compact";
 
@@ -133,6 +140,8 @@ export function ChatPane({ boxId, sessionId }: { boxId?: string; sessionId?: str
   const pinnedScrollRafRef = useRef<number>();
   const pinnedScrollTimeoutRef = useRef<number>();
   const streamBufferRef = useRef<StreamBufferState>({ text: "", thinking: "", toolPatches: [] });
+  const runtimeOutputBufferRef = useRef<RuntimeOutputBufferState>({ chunks: [] });
+  const runtimeNoticeKeysRef = useRef<Set<string>>(new Set());
   const session = sessions.find((s) => s.id === sessionId);
   const messages = sessionId ? messagesBySession[sessionId] ?? [] : [];
   const canSend = text.trim().length > 0 || images.length > 0 || fileAttachments.length > 0;
@@ -255,9 +264,21 @@ export function ChatPane({ boxId, sessionId }: { boxId?: string; sessionId?: str
     expectingTurnRef.current = false;
     setTurnActive(false);
     const ws = new WebSocket(wsUrl(`/ws/sessions/${sessionId}/events`));
+    ws.onerror = () => {
+      if (!cancelled) appendRuntimeNotice(sessionId, "Session websocket 连接失败", "无法接收 pi runtime 事件，请检查后端日志或刷新页面重试。");
+    };
+    ws.onclose = (event) => {
+      if (!cancelled && event.code !== 1000) appendRuntimeNotice(sessionId, "Session websocket 已断开", `code=${event.code}${event.reason ? ` reason=${event.reason}` : ""}`);
+    };
     ws.onmessage = (event) => {
       if (cancelled) return;
-      const msg = JSON.parse(event.data);
+      let msg: any;
+      try {
+        msg = JSON.parse(event.data);
+      } catch (err) {
+        appendRuntimeNotice(sessionId, "Session event 解析失败", `${err instanceof Error ? err.message : String(err)}\n\n${String(event.data ?? "")}`);
+        return;
+      }
       if (msg.type === "session_status") {
         if (msg.status === "working") {
           expectingTurnRef.current = true;
@@ -273,10 +294,29 @@ export function ChatPane({ boxId, sessionId }: { boxId?: string; sessionId?: str
         if (typeof msg.status === "string") {
           const localStatus = expectingTurnRef.current && (msg.status === "starting" || msg.status === "running") ? "working" : msg.status;
           patchSessionLocal({ status: localStatus as any, error: msg.error });
+          if (msg.status === "error" && msg.error) appendRuntimeNotice(sessionId, "pi runtime 错误", msg.error);
         }
+      }
+      if (msg.type === "agent_stderr") {
+        enqueueRuntimeOutput(sessionId, "stderr", String(msg.data ?? ""));
+        return;
+      }
+      if (msg.type === "agent_raw") {
+        enqueueRuntimeOutput(sessionId, "raw", String(msg.line ?? ""));
+        return;
+      }
+      if (msg.type === "agent_warning") {
+        appendRuntimeNotice(sessionId, "pi warning", msg.warning ?? msg.message ?? msg);
+        return;
+      }
+      if (msg.type === "error") {
+        appendRuntimeNotice(sessionId, "Session websocket 错误", msg.error ?? msg.message ?? msg);
+        return;
       }
       if (msg.type !== "agent_event") return;
       const e = msg.event;
+      const eventError = agentEventErrorText(e);
+      if (eventError) appendRuntimeNotice(sessionId, "pi event 错误", eventError);
       if (e.type === "agent_start" || e.type === "turn_start" || e.type === "message_start") {
         expectingTurnRef.current = true;
         setTurnActive(true);
@@ -303,6 +343,7 @@ export function ChatPane({ boxId, sessionId }: { boxId?: string; sessionId?: str
           enqueueToolPatch(sessionId, toolCallId, patch);
         }
         if (delta?.type === "done" || delta?.type === "error") {
+          if (delta?.type === "error") appendRuntimeNotice(sessionId, "pi message_update 错误", agentEventErrorText(delta) || delta);
           flushStreamBuffer();
           expectingTurnRef.current = false;
           setTurnActive(false);
@@ -347,11 +388,13 @@ export function ChatPane({ boxId, sessionId }: { boxId?: string; sessionId?: str
       await yieldToBrowser();
       const normalized = await normalizePiMessagesAsync(res.messages, () => cancelled);
       if (!cancelled) setSessionMessages(sessionId, normalized);
-    }).catch(() => undefined).finally(() => {
+    }).catch((err) => {
+      if (!cancelled) appendRuntimeNotice(sessionId, "加载 pi 历史消息失败", err instanceof Error ? err.message : String(err));
+    }).finally(() => {
       if (!cancelled) setMessagesLoading(false);
     });
     void refreshSessionStats(sessionId);
-    return () => { cancelled = true; flushStreamBuffer(); closeWebSocketQuietly(ws); };
+    return () => { cancelled = true; flushStreamBuffer(); flushRuntimeOutputBuffer(); closeWebSocketQuietly(ws); };
   }, [sessionId, appendMessage, setSessionMessages, appendAssistantDelta, upsertToolMessages]);
 
   async function submit(e?: FormEvent, modeOverride?: SendMode) {
@@ -590,6 +633,53 @@ export function ChatPane({ boxId, sessionId }: { boxId?: string; sessionId?: str
     if (toolPatches.length) upsertToolMessages(targetSessionId, coalesceToolPatches(toolPatches));
   }
 
+  function enqueueRuntimeOutput(targetSessionId: string, source: "stderr" | "raw", text: string) {
+    if (!text) return;
+    const buffer = runtimeOutputBufferRef.current;
+    if (buffer.sessionId && buffer.sessionId !== targetSessionId) flushRuntimeOutputBuffer();
+    buffer.sessionId = targetSessionId;
+    buffer.chunks.push({ source, text });
+    if (buffer.frame !== undefined || buffer.timeout !== undefined) return;
+    buffer.frame = window.requestAnimationFrame(() => flushRuntimeOutputBuffer());
+    buffer.timeout = window.setTimeout(() => flushRuntimeOutputBuffer(), 160);
+  }
+
+  function flushRuntimeOutputBuffer() {
+    const buffer = runtimeOutputBufferRef.current;
+    if (buffer.frame !== undefined) {
+      window.cancelAnimationFrame(buffer.frame);
+      buffer.frame = undefined;
+    }
+    if (buffer.timeout !== undefined) {
+      window.clearTimeout(buffer.timeout);
+      buffer.timeout = undefined;
+    }
+    const targetSessionId = buffer.sessionId;
+    if (!targetSessionId || !buffer.chunks.length) return;
+    const groups: Array<{ source: "stderr" | "raw"; text: string }> = [];
+    for (const chunk of buffer.chunks) {
+      const last = groups[groups.length - 1];
+      if (last?.source === chunk.source) last.text += chunk.source === "raw" ? `\n${chunk.text}` : chunk.text;
+      else groups.push({ ...chunk });
+    }
+    buffer.chunks = [];
+    for (const group of groups) {
+      appendRuntimeNotice(targetSessionId, group.source === "stderr" ? "pi stderr" : "pi raw output", group.text, { dedupe: false });
+    }
+  }
+
+  function appendRuntimeNotice(targetSessionId: string, title: string, detail?: unknown, options?: { dedupe?: boolean }) {
+    const body = runtimeNoticeText(title, detail);
+    const key = `${targetSessionId}:${body}`;
+    if (options?.dedupe !== false) {
+      const seen = runtimeNoticeKeysRef.current;
+      if (seen.has(key)) return;
+      if (seen.size > 400) seen.clear();
+      seen.add(key);
+    }
+    appendMessage(targetSessionId, { id: newId(), role: "system", text: body, timestamp: Date.now() });
+  }
+
   function patchSessionLocal(patch: Partial<AgentSessionRecord>) {
     const id = patch.id ?? sessionId;
     if (!id) return;
@@ -796,6 +886,8 @@ export function ChatPane({ boxId, sessionId }: { boxId?: string; sessionId?: str
       <div className={`chat-topbar-state ${activityStatus ?? ""}`} title={activityStatus === "working" ? "模型正在工作" : activityStatus === "running" ? "Agent runtime 已连接" : "空闲"}>{activityStatus && <><span className="live-dot" /> <span>{activityStatus === "working" ? "working" : "running"}</span></>}</div>
     </div>
 
+    {session?.error && <div className="chat-error-banner"><CircleAlert size={15} /><span>{session.error}</span></div>}
+
     <ChatProgressRail progress={scrollProgress} nodes={progressNodes} showBottomButton={!isNearBottom} onProgressChange={scrollToProgress} onJumpToMessage={scrollToMessage} onJumpBottom={scrollToBottom} />
 
     <div className="messages" ref={messagesRef} onScroll={handleScroll} onWheelCapture={handleMessagesWheel}>
@@ -891,6 +983,43 @@ export function ChatPane({ boxId, sessionId }: { boxId?: string; sessionId?: str
       </div>
     </form>
   </div>;
+}
+
+function runtimeNoticeText(title: string, detail?: unknown): string {
+  const detailText = runtimeDetailText(detail).trim();
+  if (!detailText) return `**${title}**`;
+  return `**${title}**\n\n\`\`\`text\n${detailText.replace(/```/g, "`\u200b``")}\n\`\`\``;
+}
+
+function runtimeDetailText(detail: unknown): string {
+  if (detail === undefined || detail === null) return "";
+  if (typeof detail === "string") return detail;
+  if (detail instanceof Error) return detail.stack || detail.message;
+  return safeJson(detail);
+}
+
+function agentEventErrorText(event: any): string {
+  if (!event || typeof event !== "object") return "";
+  const isErrorEvent = event.type === "error" || event.type === "agent_error" || event.type === "turn_error" || event.type === "message_error";
+  const isAssistantError = event.assistantMessageEvent?.type === "error";
+  const candidates = [
+    event.error,
+    event.errorMessage,
+    event.exception,
+    event.data?.error,
+    event.data?.errorMessage,
+    event.result?.error,
+    event.result?.errorMessage,
+    event.assistantMessageEvent?.error,
+    event.assistantMessageEvent?.errorMessage,
+    ...(isErrorEvent ? [event.message, event.reason] : []),
+    ...(isAssistantError ? [event.assistantMessageEvent?.message, event.assistantMessageEvent?.reason] : [])
+  ];
+  const explicit = candidates.map(runtimeDetailText).find((text) => text.trim());
+  if (explicit) return explicit;
+  if (isErrorEvent) return safeJson(event);
+  if (isAssistantError) return safeJson(event.assistantMessageEvent);
+  return "";
 }
 
 function coalesceToolPatches(items: ToolPatch[]): ToolPatch[] {
@@ -1680,7 +1809,9 @@ async function normalizePiMessagesAsync(messages: any[], isCancelled: () => bool
     if (m.role === "assistant") {
       const { text, thinking, tools } = contentParts(m.content);
       const summary = m.summary ? `[summary]\n${m.summary}` : "";
+      const errorText = piMessageErrorText(m);
       if (text || thinking || summary) out.push({ id: `${idx}-${timestamp}-assistant`, role: "assistant", text: text || summary, thinking, timestamp, transport });
+      if (errorText) out.push({ id: `${idx}-${timestamp}-assistant-error`, role: "system", text: runtimeNoticeText("pi 响应错误", errorText), timestamp, transport });
       tools.forEach((tool, toolIdx) => {
         const toolMessage: ChatMessage = { id: `${idx}-${timestamp}-tool-${toolIdx}`, role: "tool", text: "", timestamp, transport, ...tool };
         out.push(toolMessage);
@@ -1711,6 +1842,18 @@ async function normalizePiMessagesAsync(messages: any[], isCancelled: () => bool
     out.push(toolMessage);
   }
   return out;
+}
+
+function piMessageErrorText(message: any): string {
+  const error = runtimeDetailText(message?.errorMessage ?? message?.error ?? message?.exception).trim();
+  const stopReason = String(message?.stopReason ?? "").trim();
+  if (!error && stopReason !== "error") return "";
+  const meta = [
+    stopReason ? `stopReason: ${stopReason}` : "",
+    message?.provider || message?.model ? `model: ${[message?.provider, message?.model].filter(Boolean).join("/")}` : "",
+    message?.responseId ? `responseId: ${message.responseId}` : ""
+  ].filter(Boolean).join("\n");
+  return [error || "未知错误", meta].filter(Boolean).join("\n");
 }
 
 function transportMeta(message: any): ChatMessage["transport"] | undefined {

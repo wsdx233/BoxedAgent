@@ -35,6 +35,7 @@ export class AgentRuntime {
   private seq = 0;
   private stdoutBuffer = "";
   private decoder = new StringDecoder("utf8");
+  private recentStderr = "";
   private stopped = false;
   private workRequested = false;
   private liveStatus?: AgentSessionStatus;
@@ -54,6 +55,7 @@ export class AgentRuntime {
   async start(): Promise<void> {
     if (this.stream && !this.stopped) return;
     this.stopped = false;
+    this.recentStderr = "";
     const initialStatus: AgentSessionStatus = this.workRequested ? "working" : "starting";
     await store.patchSession(this.record.id, { status: initialStatus, error: undefined });
     this.publishStatus(initialStatus);
@@ -84,7 +86,7 @@ export class AgentRuntime {
       const stderr = new PassThrough();
       dockerService.docker.modem.demuxStream(stream, stdout, stderr);
       stdout.on("data", (chunk) => this.handleStdout(chunk));
-      stderr.on("data", (chunk) => wsHub.publishSession(this.record.id, { type: "agent_stderr", data: chunk.toString("utf8") }));
+      stderr.on("data", (chunk) => this.handleStderr(chunk));
       stream.on("error", (error) => this.fail(error));
       stream.on("close", () => this.onClose());
       stream.on("end", () => this.onClose());
@@ -291,6 +293,14 @@ export class AgentRuntime {
     });
   }
 
+  private handleStderr(chunk: Buffer) {
+    const text = chunk.toString("utf8");
+    if (text) {
+      this.recentStderr = tailText(`${this.recentStderr}${text}`, 12_000);
+      wsHub.publishSession(this.record.id, { type: "agent_stderr", data: text });
+    }
+  }
+
   private handleStdout(chunk: Buffer) {
     this.stdoutBuffer += this.decoder.write(chunk);
     while (true) {
@@ -332,7 +342,9 @@ export class AgentRuntime {
 
   private fail(error: unknown) {
     this.workRequested = false;
-    const text = error instanceof Error ? error.message : String(error);
+    const base = error instanceof Error ? error.message : String(error);
+    const stderr = this.recentStderr.trim();
+    const text = stderr ? `${base}\nstderr:\n${stderr}` : base;
     void store.patchSession(this.record.id, { status: "error", error: text });
     this.publishStatus("error", text);
   }
@@ -347,8 +359,10 @@ export class AgentRuntime {
     }
     this.pending.clear();
     this.stream = undefined;
-    void store.patchSession(this.record.id, { status: "stopped" }).catch(() => undefined);
-    this.publishStatus("stopped");
+    const stderr = this.recentStderr.trim();
+    const error = stderr ? `agent process exited\nstderr:\n${stderr}` : "agent process exited";
+    void store.patchSession(this.record.id, { status: "error", error }).catch(() => undefined);
+    this.publishStatus("error", error);
   }
 
   private publishStatus(status: AgentSessionStatus, error?: string) {
@@ -379,6 +393,11 @@ function sessionStatusForAgentEvent(message: any): AgentSessionStatus | undefine
     default:
       return undefined;
   }
+}
+
+function tailText(text: string, maxChars: number): string {
+  if (text.length <= maxChars) return text;
+  return text.slice(text.length - maxChars);
 }
 
 function modelProvider(model: PiModel | null | undefined): string | undefined {

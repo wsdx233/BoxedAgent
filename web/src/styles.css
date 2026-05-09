@@ -276,6 +276,8 @@ hr { border: 0; border-top: 1px solid var(--border); margin: 14px 0; }
 .empty-chat { display: grid; place-items: center; padding: 24px; }
 .welcome-card { max-width: 720px; margin: 8vh auto; text-align: center; padding: 28px; border: 1px solid var(--border); border-radius: var(--radius-xl); background: color-mix(in srgb, var(--md-sys-color-surface-container) 76%, transparent); }
 .session-loading-card { width: min(100%, 520px); margin: 20px auto; display: grid; justify-items: center; gap: 7px; text-align: center; padding: 18px; border: 1px solid color-mix(in srgb, var(--accent) 28%, var(--border)); border-radius: var(--radius-lg); background: color-mix(in srgb, var(--md-sys-color-primary-container) 16%, var(--md-sys-color-surface-container)); color: var(--md-sys-color-on-primary-container); }
+.chat-error-banner { width: min(calc(100% - 40px), 820px); margin: 10px auto 0; display: flex; align-items: flex-start; gap: 8px; padding: 10px 12px; border-radius: var(--radius-md); border: 1px solid color-mix(in srgb, var(--red) 45%, var(--border)); background: color-mix(in srgb, var(--md-sys-color-error-container) 28%, var(--md-sys-color-surface-container)); color: #ffdad6; font-size: 12px; line-height: 1.45; white-space: pre-wrap; }
+.chat-error-banner svg { flex: 0 0 auto; margin-top: 1px; }
 .session-loading-card span { color: var(--muted); font-size: 12px; }
 .welcome-card h2 { margin: 10px 0 8px; font-size: clamp(25px, 4vw, 38px); letter-spacing: -.04em; }
 .welcome-card p { margin: 0 auto 20px; color: var(--muted); line-height: 1.6; max-width: 620px; }
