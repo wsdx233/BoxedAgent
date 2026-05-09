@@ -7,7 +7,7 @@ import { dockerService } from "../docker/docker-service.js";
 import { store } from "../core/store.js";
 import { wsHub } from "../ws/hub.js";
 import { conflict } from "../core/errors.js";
-import { hostPathForContainerWorkspacePath, piRuntimeEnv } from "./pi-config.js";
+import { hostPathForContainerWorkspacePath, materializeBoxPiConfig, piRuntimeEnv } from "./pi-config.js";
 import { attachMessageMeta, findSessionMessageById, truncateSessionMessages } from "./message-truncation.js";
 
 interface PendingRequest {
@@ -64,6 +64,7 @@ export class AgentRuntime {
 
     try {
       const startingBox = await store.patchBox(this.box.id, { status: "starting", error: undefined });
+      await materializeBoxPiConfig(startingBox);
       const started = await dockerService.start(startingBox);
       await store.patchBox(this.box.id, { containerId: started.containerId, status: "running", lastActiveAt: new Date().toISOString(), error: undefined });
 

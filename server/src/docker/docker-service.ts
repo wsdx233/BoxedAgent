@@ -83,7 +83,7 @@ export class DockerService {
     const name = this.containerName(box.id);
     const envVars = Object.entries({
       ...box.env,
-      ...Object.fromEntries(piRuntimeEnv(box).map((entry) => {
+      ...Object.fromEntries(piRuntimeEnv(box, { stdioGuard: false }).map((entry) => {
         const idx = entry.indexOf("=");
         return [entry.slice(0, idx), entry.slice(idx + 1)];
       })),
