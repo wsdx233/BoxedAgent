@@ -747,6 +747,19 @@ hr { border: 0; border-top: 1px solid var(--border); margin: 14px 0; }
 .input-toggle-row { display: flex; flex-wrap: wrap; gap: 8px; }
 .thinking-map-grid, .cost-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; padding: 10px; }
 .modal-actions { padding-top: 2px; align-items: center; }
+.models-visual-editor.compact .models-visual-shell,
+.models-visual-editor.compact .models-form-grid,
+.models-visual-editor.compact .models-modal-grid,
+.models-visual-editor.compact .compat-grid,
+.models-visual-editor.compact .thinking-map-grid,
+.models-visual-editor.compact .cost-grid { grid-template-columns: 1fr; }
+.models-visual-editor.compact .models-provider-sidebar { position: static; }
+.models-visual-editor.compact .models-provider-list { max-height: 210px; }
+.models-visual-editor.compact .inline-field { grid-template-columns: 1fr; }
+.models-visual-editor.compact .models-provider-head,
+.models-visual-editor.compact .models-list-head,
+.models-visual-editor.compact .modal-actions { align-items: stretch; flex-direction: column; }
+.models-visual-editor.compact .model-card-actions { justify-content: flex-start; }
 .preview-details { border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 10px 12px; background: var(--md-sys-color-surface-container); }
 .preview-details summary { cursor: pointer; color: var(--muted); font-weight: 700; }
 .preview { background: #0f0d13; border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 12px; overflow: auto; max-height: 260px; }

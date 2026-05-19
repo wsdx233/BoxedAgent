@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import CodeMirror from "@uiw/react-codemirror";
 import { json } from "@codemirror/lang-json";
 import { markdown } from "@codemirror/lang-markdown";
@@ -236,6 +236,8 @@ function ModelsJsonVisualEditor({ value, onChange }: { value: string; onChange: 
     try { return { config: parseModelsConfigText(value) }; }
     catch (e) { return { error: e instanceof Error ? e.message : String(e) }; }
   }, [value]);
+  const rootRef = useRef<HTMLDivElement | null>(null);
+  const [compactLayout, setCompactLayout] = useState(false);
   const [selectedProviderId, setSelectedProviderId] = useState<string>();
   const [providerIdDraft, setProviderIdDraft] = useState("");
   const [editing, setEditing] = useState<{ index: number | null; model: ModelDefinition } | null>(null);
@@ -246,6 +248,26 @@ function ModelsJsonVisualEditor({ value, onChange }: { value: string; onChange: 
   const providerModels = Array.isArray(selectedProvider?.models) ? selectedProvider.models : [];
   const providerCompat = isRecord(selectedProvider?.compat) ? selectedProvider.compat : {};
   const editingModel = editing?.model;
+
+  useEffect(() => {
+    const element = rootRef.current;
+    if (!element) return;
+    const applyWidth = (width: number) => {
+      const next = width < 700;
+      setCompactLayout((current) => current === next ? current : next);
+    };
+    applyWidth(element.getBoundingClientRect().width);
+    if (typeof ResizeObserver === "undefined") {
+      const onResize = () => applyWidth(element.getBoundingClientRect().width);
+      window.addEventListener("resize", onResize);
+      return () => window.removeEventListener("resize", onResize);
+    }
+    const observer = new ResizeObserver((entries) => {
+      applyWidth(entries[0]?.contentRect.width ?? element.getBoundingClientRect().width);
+    });
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, []);
 
   useEffect(() => {
     if (!parsed.config) return;
@@ -440,13 +462,13 @@ function ModelsJsonVisualEditor({ value, onChange }: { value: string; onChange: 
   }
 
   if (parsed.error) {
-    return <div className="models-visual-editor">
+    return <div ref={rootRef} className={`models-visual-editor ${compactLayout ? "compact" : ""}`}>
       <div className="notice error"><TriangleAlert size={16} /> models.json 解析失败：{parsed.error}</div>
       <div className="small">请切换到 JSON 模式修复格式后再使用可视化编辑器。</div>
     </div>;
   }
 
-  return <div className="models-visual-editor">
+  return <div ref={rootRef} className={`models-visual-editor ${compactLayout ? "compact" : ""}`}>
     <div className="models-visual-shell">
       <aside className="models-provider-sidebar">
         <div className="row space models-sidebar-head"><strong>Providers</strong><span className="mini-badge">{providerIds.length}</span></div>
