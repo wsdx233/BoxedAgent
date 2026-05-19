@@ -1,4 +1,4 @@
-import type { AgentSessionRecord, BoxRecord, FileEntry, PiBoxConfig, PiExtensionRecord, PiExtensionScope, PiModel, SessionStats, SessionTree, ThinkingLevel } from "./types";
+import type { AgentSessionRecord, BoxPortMapping, BoxRecord, FileEntry, PiBoxConfig, PiExtensionRecord, PiExtensionScope, PiModel, SessionStats, SessionTree, ThinkingLevel } from "./types";
 
 async function request<T>(url: string, init?: RequestInit): Promise<T> {
   const headers = new Headers(init?.headers);
@@ -27,6 +27,11 @@ export const api = {
   startBox: (id: string) => request<BoxRecord>(`/api/boxes/${id}/start`, { method: "POST" }),
   stopBox: (id: string) => request<BoxRecord>(`/api/boxes/${id}/stop`, { method: "POST" }),
   deleteBox: (id: string) => request<{ ok: boolean }>(`/api/boxes/${id}?force=true`, { method: "DELETE" }),
+  listPortMappings: (boxId: string) => request<{ mappings: BoxPortMapping[] }>(`/api/boxes/${boxId}/ports`),
+  createPortMapping: (boxId: string, body: { name?: string; port: number; protocol?: "http" | "https"; slug: string; openPath?: string }) => request<{ mapping: BoxPortMapping; url: string; box: BoxRecord }>(`/api/boxes/${boxId}/ports`, { method: "POST", body: JSON.stringify(body) }),
+  updatePortMapping: (boxId: string, mappingId: string, body: Partial<Pick<BoxPortMapping, "name" | "port" | "protocol" | "slug">>) => request<{ mapping: BoxPortMapping; url: string; box: BoxRecord }>(`/api/boxes/${boxId}/ports/${mappingId}`, { method: "PATCH", body: JSON.stringify(body) }),
+  deletePortMapping: (boxId: string, mappingId: string) => request<{ ok: boolean; box: BoxRecord }>(`/api/boxes/${boxId}/ports/${mappingId}`, { method: "DELETE" }),
+  portProxyUrl: (slug: string, openPath?: string) => `${backendOrigin()}/ports/${encodeURIComponent(slug)}${openPath || "/"}`,
 
   boxModels: (boxId: string) => request<{ models: PiModel[] }>(`/api/boxes/${boxId}/models`),
   getPiConfig: (boxId: string) => request<{ pi: PiBoxConfig; env: Record<string, string>; materialized: { piCodingAgentDir: string; settings: Record<string, unknown> } }>(`/api/boxes/${boxId}/pi-config`),

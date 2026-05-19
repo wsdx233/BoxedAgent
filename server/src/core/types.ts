@@ -14,6 +14,17 @@ export interface PiBoxConfig {
   extraArgs?: string[];
 }
 
+export interface BoxPortMapping {
+  id: string;
+  name: string;
+  port: number;
+  protocol: "http" | "https";
+  slug: string;
+  openPath?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export interface BoxSpec {
   name: string;
   description?: string;
@@ -25,6 +36,7 @@ export interface BoxSpec {
   cpus?: number;
   enableCodeServer: boolean;
   codeServerPassword?: string;
+  portMappings: BoxPortMapping[];
   pi: PiBoxConfig;
 }
 

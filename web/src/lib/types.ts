@@ -27,6 +27,17 @@ export interface PiBoxConfig {
   extraArgs?: string[];
 }
 
+export interface BoxPortMapping {
+  id: string;
+  name: string;
+  port: number;
+  protocol: "http" | "https";
+  slug: string;
+  openPath?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export interface BoxRecord {
   id: string;
   name: string;
@@ -39,6 +50,7 @@ export interface BoxRecord {
   cpus?: number;
   enableCodeServer: boolean;
   codeServerPassword?: string;
+  portMappings: BoxPortMapping[];
   pi: PiBoxConfig;
   containerId?: string;
   status: BoxStatus;

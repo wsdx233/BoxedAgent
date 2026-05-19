@@ -16,6 +16,7 @@ import { registerPiExtensionRoutes } from "./routes/pi-extensions.js";
 import { registerEventWs } from "./ws/events.js";
 import { registerTerminalWs } from "./ws/terminal.js";
 import { registerCodeServerProxy } from "./routes/codeserver.js";
+import { registerPortProxyRoutes } from "./routes/ports.js";
 import { agentManager } from "./agent/agent-manager.js";
 import { assertProductionAuthConfigured, registerAuth } from "./auth.js";
 
@@ -54,6 +55,7 @@ export async function buildServer() {
   await registerPiConfigRoutes(app);
   await registerPiExtensionRoutes(app);
   await registerCodeServerProxy(app);
+  await registerPortProxyRoutes(app);
 
   if (await fs.pathExists(paths.webDistDir)) {
     await app.register(staticPlugin, { root: paths.webDistDir, prefix: "/" });

@@ -156,12 +156,18 @@ export class DockerService {
   async codeServerTarget(box: BoxRecord): Promise<string> {
     if (!box.enableCodeServer) throw badRequest("code-server is disabled for this box");
     await this.start(box);
+    return this.boxPortTarget(box, 8081, "http", "code-server port is not available yet");
+  }
+
+  async boxPortTarget(box: BoxRecord, port: number, protocol: "http" | "https", unavailableMessage = "box port is not available yet"): Promise<string> {
+    if (!Number.isInteger(port) || port < 1 || port > 65535) throw badRequest("invalid port");
     const info = await this.inspect(box);
-    const binding = info.NetworkSettings.Ports?.["8081/tcp"]?.[0];
-    if (binding?.HostPort) return `http://127.0.0.1:${binding.HostPort}`;
-    const ip = info.NetworkSettings.IPAddress;
-    if (ip) return `http://${ip}:8081`;
-    throw conflict("code-server port is not available yet");
+    const binding = info.NetworkSettings.Ports?.[`${port}/tcp`]?.[0];
+    if (binding?.HostPort) return `${protocol}://127.0.0.1:${binding.HostPort}`;
+    const networks = Object.values((info.NetworkSettings as any).Networks ?? {}) as Array<{ IPAddress?: string }>;
+    const ip = networks.find((network) => network.IPAddress)?.IPAddress || info.NetworkSettings.IPAddress;
+    if (ip) return `${protocol}://${ip}:${port}`;
+    throw conflict(unavailableMessage);
   }
 
   async exec(box: BoxRecord, cmd: string[], opts?: { cwd?: string; env?: string[]; tty?: boolean; attachStderr?: boolean }): Promise<{ stdout: string; stderr: string; exitCode: number }> {
@@ -503,6 +509,7 @@ export function defaultBoxSpec(partial: Partial<BoxSpec> & { name: string }): Bo
     cpus: partial.cpus,
     enableCodeServer: partial.enableCodeServer ?? true,
     codeServerPassword: partial.codeServerPassword ?? "boxedagent",
+    portMappings: partial.portMappings ?? [],
     pi: partial.pi ?? { defaultThinkingLevel: "medium", enabledModels: [], settingsJson: {}, modelsJson: {}, systemPrompt: "", appendSystemPrompt: "", agentsMd: "", extraArgs: [] }
   };
 }

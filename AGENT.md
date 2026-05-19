@@ -8,7 +8,7 @@ BoxedAgent is a Node.js/TypeScript Docker-based agent + sandbox platform.
 
 - A **Box** is an Ubuntu Docker sandbox with its own `/workspace` and independent pi coding-agent configuration.
 - A **Session** is a pi RPC agent runtime bound to a Box, model settings, thinking settings, and cwd.
-- The backend exposes REST + WebSocket APIs for Box/session/file/terminal/code-server management.
+- The backend exposes REST + WebSocket APIs for Box/session/file/terminal/code-server/port-proxy management.
 - The frontend is a React/Vite Web UI with desktop and mobile layouts.
 
 ## Repository Structure
@@ -21,7 +21,7 @@ BoxedAgent is a Node.js/TypeScript Docker-based agent + sandbox platform.
 │   │   ├── config/          # env loading and path resolution
 │   │   ├── core/            # shared server types, errors, persistent store
 │   │   ├── docker/          # Dockerode integration and container file ops
-│   │   ├── routes/          # REST routes: boxes, sessions, files, pi-config, code-server
+│   │   ├── routes/          # REST routes: boxes, sessions, files, pi-config, code-server, ports
 │   │   └── ws/              # WebSocket event hub and terminal bridge
 │   └── package.json
 ├── web/                     # React + Vite frontend

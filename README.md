@@ -10,7 +10,7 @@ BoxedAgent 是一个基于 Docker 的 agent + sandbox 平台：每个 **Box** �
 - Agent：容器内通过 `pi --mode rpc` 运行；支持多 Session、流式事件、文本与图片输入、中止、steer/follow-up 队列消息。
 - Session 持久化：pi session 文件保存在 Box workspace 的 `/workspace/.pi-sessions`，重启后会继续使用已有 session file。
 - 每 Box 独立 pi 配置：独立 `PI_CODING_AGENT_DIR=/workspace/.boxedagent/pi-agent`，支持 `settings.json`、`models.json`、`SYSTEM.md`、`APPEND_SYSTEM.md`、`AGENTS.md`、默认 provider/model/thinking、enabledModels 与环境变量。
-- Web UI：左侧 Box/Session 管理，中间 ChatGPT 风格对话，右侧 Shell 终端、文件浏览器（上传/下载/删除）、Pi 配置面板、code-server 代理入口。
+- Web UI：左侧 Box/Session 管理，中间 ChatGPT 风格对话，右侧 Shell 终端、文件浏览器（上传/下载/删除）、Pi 配置面板、端口映射和 code-server 代理入口。
 - API first：Web/桌面/移动客户端都可复用同一套 REST + WebSocket API。
 
 ## 快速开始（本机开发）
@@ -197,6 +197,18 @@ Prompt 示例：
 - `/ws/boxes/:boxId/events`：Box 事件。
 - `/ws/sessions/:sessionId/events`：agent RPC 流式事件。
 - `/ws/boxes/:boxId/terminal`：交互式 Shell。
+
+### 端口映射
+
+可在 Web UI 右侧 `Ports` 标签页为 Box 内部 HTTP/HTTPS 服务添加自定义 URL。示例：容器内服务监听 `0.0.0.0:3000`，创建 slug 为 `my-app` 的映射后，可通过 `/ports/my-app/` 访问。也可以配置打开路径/查询参数，例如 noVNC 可设置 `openPath: "/vnc.html?path=ports/my-vnc/websockify"`。
+
+- `GET /api/boxes/:boxId/ports`
+- `POST /api/boxes/:boxId/ports`：`{ "name": "Vite", "port": 3000, "protocol": "http", "slug": "my-app", "openPath": "/" }`
+- `PATCH /api/boxes/:boxId/ports/:mappingId`
+- `DELETE /api/boxes/:boxId/ports/:mappingId`
+- `GET /ports/:slug/*`：反向代理到对应 Box 的容器端口，支持 WebSocket 升级。
+
+> 被访问的服务需要监听 `0.0.0.0`，而不是只监听容器内的 `127.0.0.1`。由于默认使用路径前缀代理，应用如果硬编码了 `/assets/...` 这类绝对路径，建议配置对应的 base/publicPath，或读取 `X-Forwarded-Prefix`。noVNC 等应用如果需要特定 WebSocket 路径，可在映射中配置打开路径/查询参数，例如 `/vnc.html?path=ports/my-vnc/websockify`。
 
 ### 文件
 

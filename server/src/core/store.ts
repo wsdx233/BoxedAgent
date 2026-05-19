@@ -1,7 +1,7 @@
 import fs from "fs-extra";
 import { randomUUID } from "node:crypto";
 import { paths } from "../config/env.js";
-import type { AgentSessionRecord, BoxRecord, PersistedState, PiBoxConfig } from "./types.js";
+import type { AgentSessionRecord, BoxPortMapping, BoxRecord, PersistedState, PiBoxConfig } from "./types.js";
 import { notFound } from "./errors.js";
 
 const INITIAL_STATE: PersistedState = { version: 1, boxes: [], sessions: [] };
@@ -174,8 +174,29 @@ function normalizeBox(box: BoxRecord): BoxRecord {
     ...box,
     env: box.env ?? {},
     labels: box.labels ?? {},
+    portMappings: (box.portMappings ?? []).map((mapping) => normalizePortMapping(mapping)),
     pi: normalizePiConfig(box.pi)
   };
+}
+
+function normalizePortMapping(mapping: BoxPortMapping): BoxPortMapping {
+  const now = new Date().toISOString();
+  return {
+    id: mapping.id,
+    name: mapping.name || `${(mapping.protocol ?? "http").toUpperCase()} ${mapping.port}`,
+    port: mapping.port,
+    protocol: mapping.protocol === "https" ? "https" : "http",
+    slug: mapping.slug,
+    openPath: normalizeMappingOpenPath(mapping.openPath),
+    createdAt: mapping.createdAt ?? now,
+    updatedAt: mapping.updatedAt ?? mapping.createdAt ?? now
+  };
+}
+
+function normalizeMappingOpenPath(value?: string): string | undefined {
+  const trimmed = value?.trim();
+  if (!trimmed || trimmed === "/") return undefined;
+  return trimmed.startsWith("/") ? trimmed : `/${trimmed}`;
 }
 
 function normalizeSession(session: AgentSessionRecord): AgentSessionRecord {

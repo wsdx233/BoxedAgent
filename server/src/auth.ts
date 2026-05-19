@@ -54,7 +54,7 @@ export async function registerAuth(app: FastifyInstance) {
 }
 
 function requiresAuth(pathname: string) {
-  return pathname.startsWith("/api/") || pathname.startsWith("/ws/") || pathname.startsWith("/codeserver/") || pathname === "/codeserver";
+  return pathname.startsWith("/api/") || pathname.startsWith("/ws/") || pathname.startsWith("/codeserver/") || pathname === "/codeserver" || pathname.startsWith("/ports/") || pathname === "/ports";
 }
 
 function isAuthorized(req: FastifyRequest) {
