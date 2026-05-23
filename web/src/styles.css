@@ -242,7 +242,7 @@ hr { border: 0; border-top: 1px solid var(--border); margin: 14px 0; }
 .runtime-chip { display: inline-flex; align-items: center; max-width: min(100%, 520px); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; border-radius: 999px; padding: 4px 8px; border: 1px solid color-mix(in srgb, var(--border) 80%, transparent); background: color-mix(in srgb, var(--md-sys-color-surface-container-lowest) 68%, transparent); color: var(--muted); font: 11px/1.2 "JetBrains Mono", "Cascadia Mono", ui-monospace, monospace; }
 .context-chip { color: var(--md-sys-color-on-primary-container); background: color-mix(in srgb, var(--md-sys-color-primary-container) 24%, transparent); border-color: color-mix(in srgb, var(--accent) 24%, var(--border)); }
 .cwd-chip { direction: rtl; text-align: left; }
-.messages { flex: 1; overflow: auto; padding: 28px clamp(42px, 5vw, 76px) 28px clamp(22px, 5vw, 72px); background: radial-gradient(circle at 50% 0, rgba(208,188,255,.08), transparent 34%); scroll-behavior: smooth; scrollbar-width: none; -ms-overflow-style: none; }
+.messages { flex: 1; min-height: 0; overflow: auto; padding: 28px clamp(42px, 5vw, 76px) 28px clamp(22px, 5vw, 72px); background: radial-gradient(circle at 50% 0, rgba(208,188,255,.08), transparent 34%); scroll-behavior: smooth; scrollbar-width: none; -ms-overflow-style: none; }
 .messages::-webkit-scrollbar { width: 0; height: 0; display: none; }
 .messages-content { min-height: 100%; }
 .message-anchor-wrap { scroll-margin-top: 92px; }
