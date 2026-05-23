@@ -137,6 +137,7 @@ export function ChatPane({ boxId, sessionId }: { boxId?: string; sessionId?: str
   const expectingTurnRef = useRef(false);
   const dragDepthRef = useRef(0);
   const stickToBottomRef = useRef(true);
+  const autoScrollLockUntilRef = useRef(0);
   const pinnedScrollRafRef = useRef<number>();
   const pinnedScrollTimeoutRef = useRef<number>();
   const streamBufferRef = useRef<StreamBufferState>({ text: "", thinking: "", toolPatches: [] });
@@ -187,7 +188,10 @@ export function ChatPane({ boxId, sessionId }: { boxId?: string; sessionId?: str
       }));
       const remaining = scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight;
       const nearBottom = remaining < 180;
-      if (remaining < 8) stickToBottomRef.current = true;
+      if (remaining < 8) {
+        stickToBottomRef.current = true;
+        autoScrollLockUntilRef.current = 0;
+      }
       setIsNearBottom(nearBottom);
       setScrollProgress(Math.min(1, Math.max(0, scroller.scrollTop / maxScroll)));
     };
@@ -484,8 +488,11 @@ export function ChatPane({ boxId, sessionId }: { boxId?: string; sessionId?: str
   function updateScrollFollowState(el: HTMLDivElement) {
     const remaining = el.scrollHeight - el.scrollTop - el.clientHeight;
     const nearBottom = remaining < 180;
-    if (remaining < 8) stickToBottomRef.current = true;
-    else if (remaining > 24) stickToBottomRef.current = false;
+    const isAutoScrolling = stickToBottomRef.current && performance.now() < autoScrollLockUntilRef.current;
+    if (remaining < 8) {
+      stickToBottomRef.current = true;
+      autoScrollLockUntilRef.current = 0;
+    } else if (remaining > 24 && !isAutoScrolling) stickToBottomRef.current = false;
     setIsNearBottom(nearBottom);
     const maxScroll = Math.max(1, el.scrollHeight - el.clientHeight);
     setScrollProgress(Math.min(1, Math.max(0, el.scrollTop / maxScroll)));
@@ -510,6 +517,7 @@ export function ChatPane({ boxId, sessionId }: { boxId?: string; sessionId?: str
 
   function detachFromBottom() {
     stickToBottomRef.current = false;
+    autoScrollLockUntilRef.current = 0;
     cancelPinnedScroll();
   }
 
@@ -521,8 +529,15 @@ export function ChatPane({ boxId, sessionId }: { boxId?: string; sessionId?: str
     const el = messagesRef.current;
     if (!el) return;
     stickToBottomRef.current = true;
+    autoScrollLockUntilRef.current = Math.max(autoScrollLockUntilRef.current, performance.now() + (behavior === "smooth" ? 700 : 260));
     if (behavior === "smooth") el.scrollTo({ top: el.scrollHeight, behavior });
-    else el.scrollTop = el.scrollHeight;
+    else {
+      const previousScrollBehavior = el.style.scrollBehavior;
+      el.style.scrollBehavior = "auto";
+      el.scrollTop = el.scrollHeight;
+      if (previousScrollBehavior) el.style.scrollBehavior = previousScrollBehavior;
+      else el.style.removeProperty("scroll-behavior");
+    }
     setIsNearBottom(true);
     setScrollProgress(1);
   }
