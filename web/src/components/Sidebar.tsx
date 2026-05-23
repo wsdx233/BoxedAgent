@@ -51,7 +51,7 @@ export function Sidebar({ onNewBox, onSessionSelected }: { onNewBox: () => void;
       ? { label: "停止", icon: <Square size={14} />, onClick: async () => { await api.stopBox(menuBox.id); await refresh(); } }
       : { label: "启动", icon: <Play size={14} />, onClick: async () => { await api.startBox(menuBox.id); await refresh(); } },
     { label: "复刻配置", icon: <Copy size={14} />, onClick: async () => { const name = prompt("复刻名称", duplicateBoxName(menuBox.name))?.trim(); if (name) { const box = await api.duplicateBox(menuBox.id, { name }); await refresh(); setActiveBox(box.id); } } },
-    { label: "克隆", icon: <Copy size={14} />, onClick: async () => { const name = prompt("克隆名称", `${menuBox.name}-clone`)?.trim(); if (name) { await api.cloneBox(menuBox.id, { name }); await refresh(); } } },
+    { label: "克隆", icon: <Copy size={14} />, onClick: async () => { const name = prompt("克隆名称", cloneBoxName(menuBox.name))?.trim(); if (name) { await api.cloneBox(menuBox.id, { name }); await refresh(); } } },
     { label: "删除", icon: <Trash2 size={14} />, danger: true, onClick: async () => { if (confirm(`删除 Box ${menuBox.name}?`)) { await api.deleteBox(menuBox.id); await refresh(); } } }
   ] : [];
 
@@ -59,8 +59,8 @@ export function Sidebar({ onNewBox, onSessionSelected }: { onNewBox: () => void;
     { label: "重命名", icon: <Edit3 size={14} />, onClick: () => setRenameTarget({ kind: "session", id: menuSession.id, name: menuSession.name }) },
     { label: "Tree", icon: <GitBranch size={14} />, onClick: () => setTreeTarget(menuSession) },
     { label: "Fork", icon: <GitFork size={14} />, onClick: () => setForkTarget(menuSession) },
-    { label: "Clone", icon: <Copy size={14} />, onClick: async () => { const res = await api.cloneSession(menuSession.id); if (!res.cancelled) { await refresh(); setActiveSession(res.session.id); onSessionSelected?.(); } } },
-    { label: "复刻空配置", icon: <Copy size={14} />, onClick: async () => { const res = await api.duplicateSession(menuSession.id); await refresh(); setActiveSession(res.session.id); onSessionSelected?.(); } },
+    { label: "Clone", icon: <Copy size={14} />, onClick: async () => { const res = await api.cloneSession(menuSession.id, { name: cloneSessionName(menuSession.name) }); if (!res.cancelled) { await refresh(); setActiveSession(res.session.id); onSessionSelected?.(); } } },
+    { label: "复刻空配置", icon: <Copy size={14} />, onClick: async () => { const res = await api.duplicateSession(menuSession.id, { name: duplicateSessionName(menuSession.name) }); await refresh(); setActiveSession(res.session.id); onSessionSelected?.(); } },
     menuSession.status === "running" || menuSession.status === "working"
       ? { label: "停止", icon: <Square size={14} />, onClick: async () => { await api.stopSession(menuSession.id); await refresh(); } }
       : { label: "启动", icon: <Play size={14} />, onClick: async () => { await api.startSession(menuSession.id); await refresh(); } },
@@ -125,9 +125,40 @@ function StatusIndicator({ status }: { status: string }) {
 }
 
 function duplicateBoxName(name: string): string {
-  const suffix = "-copy";
-  const base = name.trim() || "box";
-  return `${base.slice(0, 80 - suffix.length)}${suffix}`;
+  return operationName(name, (baseName) => {
+    const suffix = "-copy";
+    const base = baseName || "box";
+    return `${base.slice(0, 80 - suffix.length)}${suffix}`;
+  });
+}
+
+function cloneBoxName(name: string): string {
+  return operationName(name, (baseName) => `${baseName || "box"}-clone`);
+}
+
+function duplicateSessionName(name: string): string {
+  return operationName(name, (baseName) => `${baseName} 复刻`);
+}
+
+function cloneSessionName(name: string): string {
+  return operationName(name, (baseName) => `${baseName} clone`);
+}
+
+function forkSessionName(name: string): string {
+  return operationName(name, (baseName) => `${baseName} fork`);
+}
+
+function operationName(name: string, fallback: (baseName: string) => string): string {
+  const base = name.trim();
+  return incrementTrailingNumber(base) ?? fallback(base);
+}
+
+function incrementTrailingNumber(name: string): string | undefined {
+  const match = /^(.*?)(\d+)$/.exec(name);
+  if (!match) return undefined;
+  const [, prefix, digits] = match;
+  const next = (BigInt(digits) + 1n).toString();
+  return `${prefix}${next.padStart(digits.length, "0")}`;
 }
 
 function previewText(value: string, max = 120): string {
@@ -230,7 +261,7 @@ function ForkDialog({ session, onClose, onForked }: { session: AgentSessionRecor
     setForkingId(entryId);
     setError(undefined);
     try {
-      const res = await api.forkSession(session.id, { entryId });
+      const res = await api.forkSession(session.id, { entryId, name: forkSessionName(session.name) });
       if (!res.cancelled) await onForked(res.session, res.text);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
