@@ -5,6 +5,7 @@ import { wsHub } from "../ws/hub.js";
 import { readPiSessionMessage, readPiSessionMessages } from "./session-reader.js";
 import { getPiSessionTree, navigatePiSessionTree } from "./session-tree.js";
 import { conflict } from "../core/errors.js";
+import { getPiLoadedResourcesForSession } from "./pi-resources.js";
 
 export class AgentManager {
   private runtimes = new Map<string, AgentRuntime>();
@@ -29,10 +30,10 @@ export class AgentManager {
     return saved;
   }
 
-  async start(id: string): Promise<AgentSessionRecord> {
+  async start(id: string, options: { resourceReason?: "startup" | "reload" } = {}): Promise<AgentSessionRecord> {
     const session = store.getSession(id);
     const runtime = await this.runtime(session.id);
-    await runtime.start();
+    await runtime.start(options.resourceReason ?? "startup");
     return store.getSession(id);
   }
 
@@ -55,7 +56,7 @@ export class AgentManager {
       await runtime.stop();
       this.runtimes.delete(id);
     }
-    const reloaded = await this.start(id);
+    const reloaded = await this.start(id, { resourceReason: "reload" });
     wsHub.publishBox(session.boxId, { type: "sessions_changed" });
     return reloaded;
   }
@@ -149,6 +150,12 @@ export class AgentManager {
   async stats(id: string): Promise<SessionStats | null> {
     const runtime = await this.runtime(id);
     return runtime.stats();
+  }
+
+  async loadedResources(id: string) {
+    const runtime = this.runtimes.get(id);
+    if (runtime?.isActive()) return runtime.loadedResources();
+    return getPiLoadedResourcesForSession(id, { reason: "manual" });
   }
 
   async setModel(id: string, provider: string, modelId: string) {

@@ -5,7 +5,7 @@ import { z } from "zod";
 import { store } from "../core/store.js";
 import { badRequest, notFound } from "../core/errors.js";
 import { dockerService } from "../docker/docker-service.js";
-import { PI_AGENT_DIR_IN_CONTAINER } from "../agent/pi-config.js";
+import { materializeBoxPiConfig, PI_AGENT_DIR_IN_CONTAINER } from "../agent/pi-config.js";
 
 export interface PiExtensionRecord {
   name: string;
@@ -24,6 +24,12 @@ const SourceSchema = z.object({
   scope: z.enum(["box", "workspace"]).default("box"),
   cwd: z.string().default("/workspace"),
   overwrite: z.boolean().default(false)
+});
+
+const RemoveSchema = z.object({
+  source: z.string().min(1),
+  scope: z.enum(["box", "workspace"]).default("box"),
+  cwd: z.string().default("/workspace")
 });
 
 const UploadSchema = z.object({
@@ -82,6 +88,20 @@ export async function registerPiExtensionRoutes(app: FastifyInstance) {
     return { ok: true, message: reloadHint(scope) };
   });
 
+  app.post("/api/boxes/:boxId/pi-extensions/pi-remove", async (req) => {
+    const { boxId } = req.params as { boxId: string };
+    const body = RemoveSchema.parse(req.body ?? {});
+    const box = store.getBox(boxId);
+    await dockerService.start(box);
+    await materializeBoxPiConfig(box);
+    const cwd = normalizeContainerCwd(body.cwd);
+    const args = ["pi", "remove", body.source];
+    if (body.scope === "workspace") args.push("-l");
+    const result = await dockerService.exec(box, args, { cwd, env: [`PI_CODING_AGENT_DIR=${PI_AGENT_DIR_IN_CONTAINER}`, "PI_SKIP_VERSION_CHECK=1", "PI_TELEMETRY=0"] });
+    if (result.exitCode !== 0) throw badRequest(result.stderr || result.stdout || "pi remove failed");
+    return { ok: true, stdout: result.stdout, stderr: result.stderr, message: reloadHint(body.scope) };
+  });
+
   app.post("/api/boxes/:boxId/pi-extensions/migrate", async (req) => {
     const { boxId } = req.params as { boxId: string };
     const body = MigrateSchema.parse(req.body ?? {});
@@ -114,6 +134,7 @@ export async function registerPiExtensionRoutes(app: FastifyInstance) {
     const body = SourceSchema.parse(req.body ?? {});
     const box = store.getBox(boxId);
     await dockerService.start(box);
+    await materializeBoxPiConfig(box);
     const cwd = normalizeContainerCwd(body.cwd);
     const args = ["pi", "install", body.source];
     if (body.scope === "workspace") args.push("-l");

@@ -67,6 +67,7 @@ export function App() {
   }, [activeBoxId, sessions, activeSessionId]);
 
   const activeBox = boxes.find((b) => b.id === activeBoxId);
+  const activeSession = sessions.find((session) => session.id === activeSessionId);
   const appStyle = { "--left-width": `${leftWidth}px`, "--right-width": `${rightWidth}px` } as CSSProperties;
   const appClass = ["app", leftVisible ? "" : "left-hidden", rightVisible ? "" : "right-hidden", `mobile-panel-${mobilePanel}`].filter(Boolean).join(" ");
 
@@ -113,7 +114,7 @@ export function App() {
       <div className="app-resizer left" role="separator" aria-label="调整 Boxes 宽度" onPointerDown={(event) => startResize("left", event)} />
       <ChatPane boxId={activeBoxId} sessionId={activeSessionId} />
       <div className="app-resizer right" role="separator" aria-label="调整 Tools 宽度" onPointerDown={(event) => startResize("right", event)} />
-      <RightPanel box={activeBox} boxes={boxes} sessionId={activeSessionId} onRefresh={refresh} />
+      <RightPanel box={activeBox} boxes={boxes} sessionId={activeSessionId} sessionCwd={activeSession?.cwd} onRefresh={refresh} />
     </div>
     <div className="layout-controls desktop-only">
       <button type="button" className="icon-button" title={leftVisible ? "隐藏 Boxes" : "显示 Boxes"} onClick={() => setLeftVisible((value) => !value)}>{leftVisible ? <PanelLeftClose size={18} /> : <PanelLeftOpen size={18} />}</button>

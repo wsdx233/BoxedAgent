@@ -200,10 +200,14 @@ function normalizeMappingOpenPath(value?: string): string | undefined {
 }
 
 function normalizeSession(session: AgentSessionRecord): AgentSessionRecord {
+  const loadedResources = session.loadedResources && typeof session.loadedResources === "object"
+    ? { ...session.loadedResources, cwd: normalizeSessionCwd(session.loadedResources.cwd) }
+    : undefined;
   return {
     ...session,
     cwd: normalizeSessionCwd(session.cwd),
-    autoCompactionEnabled: session.autoCompactionEnabled ?? true
+    autoCompactionEnabled: session.autoCompactionEnabled ?? true,
+    loadedResources
   };
 }
 

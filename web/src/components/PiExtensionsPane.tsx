@@ -3,7 +3,7 @@ import { CheckCircle2, Copy, PackagePlus, Plug, RefreshCw, RotateCw, SendToBack,
 import { api } from "../lib/api";
 import type { BoxRecord, PiExtensionRecord, PiExtensionScope } from "../lib/types";
 
-export function PiExtensionsPane({ box, boxes, sessionId, onSessionReloaded }: { box?: BoxRecord; boxes: BoxRecord[]; sessionId?: string; onSessionReloaded?: () => void }) {
+export function PiExtensionsPane({ box, boxes, sessionId, sessionCwd, onSessionReloaded }: { box?: BoxRecord; boxes: BoxRecord[]; sessionId?: string; sessionCwd?: string; onSessionReloaded?: () => void }) {
   const [extensions, setExtensions] = useState<PiExtensionRecord[]>([]);
   const [scope, setScope] = useState<PiExtensionScope>("box");
   const [source, setSource] = useState("");
@@ -24,6 +24,8 @@ export function PiExtensionsPane({ box, boxes, sessionId, onSessionReloaded }: {
     setSelected(new Set());
     setTargetBoxIds(new Set());
   }, [box?.id]);
+
+  useEffect(() => { if (sessionCwd) setCwd((current) => current === normalizeCwd(sessionCwd) ? current : normalizeCwd(sessionCwd)); }, [sessionCwd]);
 
   useEffect(() => { void refresh(); }, [box?.id, cwd]);
 
@@ -79,7 +81,20 @@ export function PiExtensionsPane({ box, boxes, sessionId, onSessionReloaded }: {
   }
 
   async function remove(ext: PiExtensionRecord) {
-    if (!box || ext.type === "package" || ext.type === "path") return;
+    if (!box) return;
+    if (ext.type === "package") {
+      const source = ext.source || ext.path;
+      if (!confirm(`卸载 ${labelScope(ext.scope)} package：${source}？`)) return;
+      await run(
+        () => api.piRemovePackage(box.id, { source, scope: ext.scope, cwd }),
+        (res) => `package 已卸载。${res.message}${res.stdout ? `\n${res.stdout.trim()}` : ""}`
+      );
+      return;
+    }
+    if (ext.type === "path") {
+      setError("settings.json 中手动配置的 extension path 暂不自动删除；请在 Pi 配置里移除 settings.extensions 对应条目。");
+      return;
+    }
     if (!confirm(`删除 ${labelScope(ext.scope)} extension：${ext.name}？`)) return;
     await run(
       () => api.deletePiExtension(box.id, ext.scope, ext.name, cwd),
@@ -137,7 +152,7 @@ export function PiExtensionsPane({ box, boxes, sessionId, onSessionReloaded }: {
       <div className="section-title"><PackagePlus size={16} /> 安装</div>
       <div className="settings-grid">
         <label>安装范围<select value={scope} onChange={(e) => setScope(e.target.value as PiExtensionScope)}><option value="box">Box 全局</option><option value="workspace">当前文件夹工作区</option></select></label>
-        <label>工作区 cwd<input value={cwd} onChange={(e) => setCwd(e.target.value)} placeholder="/workspace 或 /workspace/project" /></label>
+        <label>工作区 cwd<input value={cwd} onChange={(e) => setCwd(e.target.value)} onBlur={(e) => setCwd(normalizeCwd(e.target.value))} placeholder="/workspace 或 /workspace/project" /></label>
         <label>自定义名称（可选）<input value={name} onChange={(e) => setName(e.target.value)} placeholder="my-extension.ts / my-extension" /></label>
         <label className="checkbox-label"><input type="checkbox" checked={overwrite} onChange={(e) => setOverwrite(e.target.checked)} /> 覆盖同名 extension</label>
       </div>
@@ -170,7 +185,7 @@ export function PiExtensionsPane({ box, boxes, sessionId, onSessionReloaded }: {
             <div className="row"><strong>{ext.name}</strong><span className="status">{labelScope(ext.scope)}</span><span className="status">{typeLabel(ext.type)}</span></div>
             <div className="small"><code>{ext.path}</code>{ext.entrypoint ? ` · ${ext.entrypoint}` : ""}</div>
           </div>
-          {ext.type === "package" || ext.type === "path" ? <span className="small">settings 中配置</span> : <button className="compact danger" onClick={() => remove(ext)} disabled={busy}><Trash2 size={14} /> 删除</button>}
+          {ext.type === "path" ? <button className="compact" onClick={() => remove(ext)} disabled={busy}><Trash2 size={14} /> settings</button> : <button className="compact danger" onClick={() => remove(ext)} disabled={busy}><Trash2 size={14} /> {ext.type === "package" ? "卸载" : "删除"}</button>}
         </div>)}
       </div>
     </section>
@@ -203,4 +218,12 @@ function typeLabel(type: PiExtensionRecord["type"]): string {
   if (type === "package") return "pi package";
   if (type === "path") return "settings path";
   return type;
+}
+
+function normalizeCwd(value: string): string {
+  const trimmed = value.trim() || "/workspace";
+  if (trimmed === "/workspace" || trimmed.startsWith("/workspace/")) return trimmed.replace(/\/+$/, "") || "/workspace";
+  const rel = trimmed.replace(/^\/+/, "");
+  if (!rel || rel === "." || rel.includes("..")) return "/workspace";
+  return `/workspace/${rel}`.replace(/\/+$/, "");
 }

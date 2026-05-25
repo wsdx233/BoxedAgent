@@ -49,7 +49,7 @@ import SiYaml from "@icons-pack/react-simple-icons/icons/SiYaml.mjs";
 import { api, closeWebSocketQuietly, wsUrl } from "../lib/api";
 import { COMPOSER_INSERT_EVENT, type ComposerInsertDetail } from "../lib/composer-events";
 import { newId } from "../lib/id";
-import type { AgentSessionRecord, ChatAttachment, ChatMessage, PiModel, SessionStats, ThinkingLevel, ToolResultMeta } from "../lib/types";
+import type { AgentSessionRecord, ChatAttachment, ChatMessage, PiLoadedResources, PiModel, SessionStats, ThinkingLevel, ToolResultMeta } from "../lib/types";
 import { useAppStore } from "../state/app";
 
 interface QueueState {
@@ -241,6 +241,13 @@ export function ChatPane({ boxId, sessionId }: { boxId?: string; sessionId?: str
   }, [session?.provider, session?.model, session?.thinkingLevel, session?.autoCompactionEnabled]);
 
   useEffect(() => {
+    if (!sessionId || !session?.loadedResources) return;
+    const current = useAppStore.getState().messagesBySession[sessionId] ?? [];
+    if (current.length > 0) return;
+    appendLoadedResourcesNotice(sessionId, session.loadedResources);
+  }, [sessionId, session?.loadedResources?.generatedAt]);
+
+  useEffect(() => {
     if (!sessionId) return;
     const onInsert = (event: Event) => {
       const detail = (event as CustomEvent<ComposerInsertDetail>).detail;
@@ -311,6 +318,16 @@ export function ChatPane({ boxId, sessionId }: { boxId?: string; sessionId?: str
       }
       if (msg.type === "agent_warning") {
         appendRuntimeNotice(sessionId, "pi warning", msg.warning ?? msg.message ?? msg);
+        return;
+      }
+      if (msg.type === "loaded_resources") {
+        const resources = msg.resources as PiLoadedResources;
+        patchSessionLocal({ loadedResources: resources, cwd: resources.cwd });
+        appendLoadedResourcesNotice(sessionId, resources);
+        return;
+      }
+      if (msg.type === "extension_ui") {
+        handleExtensionUiMessage(sessionId, msg.request);
         return;
       }
       if (msg.type === "error") {
@@ -391,7 +408,13 @@ export function ChatPane({ boxId, sessionId }: { boxId?: string; sessionId?: str
     void api.messages(sessionId).then(async (res) => {
       await yieldToBrowser();
       const normalized = await normalizePiMessagesAsync(res.messages, () => cancelled);
-      if (!cancelled) setSessionMessages(sessionId, normalized);
+      if (!cancelled) {
+        setSessionMessages(sessionId, normalized);
+        if (normalized.length === 0) {
+          const resources = useAppStore.getState().sessions.find((item) => item.id === sessionId)?.loadedResources;
+          if (resources) window.setTimeout(() => appendLoadedResourcesNotice(sessionId, resources), 0);
+        }
+      }
     }).catch((err) => {
       if (!cancelled) appendRuntimeNotice(sessionId, "加载 pi 历史消息失败", err instanceof Error ? err.message : String(err));
     }).finally(() => {
@@ -411,7 +434,8 @@ export function ChatPane({ boxId, sessionId }: { boxId?: string; sessionId?: str
         setText("");
         const res = await api.reloadSession(sessionId);
         patchSessionLocal(res.session);
-        appendMessage(sessionId, { id: newId(), role: "system", text: "已 reload 当前 pi session：extensions / skills / prompts / themes 已重新加载。", timestamp: Date.now() });
+        if (res.session.loadedResources) appendLoadedResourcesNotice(sessionId, res.session.loadedResources);
+        else appendMessage(sessionId, { id: newId(), role: "system", text: "已 reload 当前 pi session：extensions / skills / prompts / themes 已重新加载。", timestamp: Date.now() });
         void syncRuntimeState();
       } catch (err) {
         appendMessage(sessionId, { id: newId(), role: "system", text: `Reload 失败：${err instanceof Error ? err.message : String(err)}`, timestamp: Date.now() });
@@ -695,6 +719,27 @@ export function ChatPane({ boxId, sessionId }: { boxId?: string; sessionId?: str
     appendMessage(targetSessionId, { id: newId(), role: "system", text: body, timestamp: Date.now() });
   }
 
+  function appendLoadedResourcesNotice(targetSessionId: string, resources: PiLoadedResources) {
+    const body = formatLoadedResources(resources);
+    const key = `${targetSessionId}:resources:${resources.reason ?? "startup"}:${resources.cwd}:${resources.generatedAt}`;
+    const seen = runtimeNoticeKeysRef.current;
+    if (seen.has(key)) return;
+    const current = useAppStore.getState().messagesBySession[targetSessionId] ?? [];
+    if (current.some((message) => message.role === "system" && message.text === body)) return;
+    if (seen.size > 400) seen.clear();
+    seen.add(key);
+    appendMessage(targetSessionId, { id: newId(), role: "system", text: body, timestamp: Date.now() });
+  }
+
+  function handleExtensionUiMessage(targetSessionId: string, request: any) {
+    if (!request || typeof request !== "object") return;
+    if (request.method === "set_editor_text" && typeof request.text === "string") {
+      setText(request.text);
+      return;
+    }
+    if (request.method === "notify") appendRuntimeNotice(targetSessionId, `extension ${request.notifyType ?? "info"}`, request.message);
+  }
+
   function patchSessionLocal(patch: Partial<AgentSessionRecord>) {
     const id = patch.id ?? sessionId;
     if (!id) return;
@@ -733,7 +778,10 @@ export function ChatPane({ boxId, sessionId }: { boxId?: string; sessionId?: str
     if (!id) return;
     try {
       const res = await api.sessionStats(id);
-      if (id === useAppStore.getState().activeSessionId) setStats(res.stats ?? null);
+      if (id === useAppStore.getState().activeSessionId) {
+        setStats(res.stats ?? null);
+        if (res.stats?.loadedResources) patchSessionLocal({ id, loadedResources: res.stats.loadedResources, cwd: res.stats.loadedResources.cwd });
+      }
     } catch {
       if (id === useAppStore.getState().activeSessionId) setStats(null);
     }
@@ -998,6 +1046,32 @@ export function ChatPane({ boxId, sessionId }: { boxId?: string; sessionId?: str
       </div>
     </form>
   </div>;
+}
+
+function formatLoadedResources(resources: PiLoadedResources): string {
+  const title = resources.reason === "reload" ? "已 reload 当前 pi session" : resources.reason === "manual" ? "当前 pi session 已加载资源" : "pi session 已启动并加载资源";
+  const lines = [`${title}（cwd: ${resources.cwd}）`];
+  addResourceLine(lines, "Context", resources.contextFiles.map((item) => item.path));
+  addResourceLine(lines, "Packages", resources.packages.map((item) => item.source || item.path || item.name));
+  addResourceLine(lines, "Extensions", resources.extensions.map((item) => item.name || item.path));
+  addResourceLine(lines, "Skills", resources.skills.map((item) => item.name));
+  addResourceLine(lines, "Prompts", resources.prompts.map((item) => item.name));
+  addResourceLine(lines, "Themes", resources.themes.map((item) => item.name));
+  if (resources.diagnostics.length) lines.push(`Warnings: ${previewList(resources.diagnostics, 4)}`);
+  if (lines.length === 1) lines.push("未发现 AGENTS.md / packages / extensions / skills / prompts / themes。");
+  return lines.join("\n");
+}
+
+function addResourceLine(lines: string[], label: string, values: string[]) {
+  const clean = values.map((value) => value.trim()).filter(Boolean);
+  if (clean.length) lines.push(`${label}: ${previewList(clean, 8)}`);
+}
+
+function previewList(values: string[], max: number): string {
+  const unique = Array.from(new Set(values));
+  const shown = unique.slice(0, max).join(", ");
+  const remaining = unique.length - max;
+  return remaining > 0 ? `${shown} … +${remaining}` : shown;
 }
 
 function runtimeNoticeText(title: string, detail?: unknown): string {

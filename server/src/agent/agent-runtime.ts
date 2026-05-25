@@ -9,6 +9,7 @@ import { wsHub } from "../ws/hub.js";
 import { conflict } from "../core/errors.js";
 import { hostPathForContainerWorkspacePath, materializeBoxPiConfig, piRuntimeEnv } from "./pi-config.js";
 import { attachMessageMeta, findSessionMessageById, truncateSessionMessages } from "./message-truncation.js";
+import { collectPiLoadedResources } from "./pi-resources.js";
 
 interface PendingRequest {
   resolve: (value: unknown) => void;
@@ -53,7 +54,7 @@ export class AgentRuntime {
     return Boolean(this.stream && !this.stopped);
   }
 
-  async start(): Promise<void> {
+  async start(resourceReason: "startup" | "reload" = "startup"): Promise<void> {
     if (this.stream && !this.stopped) return;
     this.syncRecordFromStore();
     this.stopped = false;
@@ -97,6 +98,9 @@ export class AgentRuntime {
       const readyStatus: AgentSessionStatus = this.workRequested ? "working" : "running";
       await store.patchSession(this.record.id, { status: readyStatus, lastActiveAt: new Date().toISOString() });
       this.publishStatus(readyStatus);
+      await this.refreshLoadedResources(resourceReason).catch((error) => {
+        wsHub.publishSession(this.record.id, { type: "agent_warning", warning: error instanceof Error ? error.message : String(error) });
+      });
       await this.refreshSessionState().catch((error) => {
         wsHub.publishSession(this.record.id, { type: "agent_warning", warning: error instanceof Error ? error.message : String(error) });
       });
@@ -187,7 +191,13 @@ export class AgentRuntime {
 
   async stats(): Promise<SessionStats> {
     await this.start();
-    return this.send({ type: "get_session_stats" }, 30_000) as Promise<SessionStats>;
+    const stats = await this.send({ type: "get_session_stats" }, 30_000) as SessionStats;
+    return { ...stats, loadedResources: this.record.loadedResources };
+  }
+
+  async loadedResources() {
+    await this.start();
+    return this.refreshLoadedResources("manual");
   }
 
   async setModel(provider: string, modelId: string): Promise<PiModel | null> {
@@ -246,6 +256,14 @@ export class AgentRuntime {
     this.stream = undefined;
     await store.patchSession(this.record.id, { status: "stopped" });
     this.publishStatus("stopped");
+  }
+
+  private async refreshLoadedResources(reason: "startup" | "reload" | "manual") {
+    const resources = await collectPiLoadedResources(this.box, this.record.cwd, { reason });
+    this.record = await store.patchSession(this.record.id, { loadedResources: resources, cwd: resources.cwd, lastActiveAt: new Date().toISOString() });
+    wsHub.publishSession(this.record.id, { type: "loaded_resources", resources });
+    wsHub.publishBox(this.box.id, { type: "sessions_changed" });
+    return resources;
   }
 
   private async refreshSessionState() {
@@ -358,6 +376,11 @@ export class AgentRuntime {
       return;
     }
 
+    if (message.type === "extension_ui_request") {
+      this.handleExtensionUiRequest(message);
+      return;
+    }
+
     if (message.type === "response" && message.id && this.pending.has(message.id)) {
       const pending = this.pending.get(message.id)!;
       this.pending.delete(message.id);
@@ -373,6 +396,19 @@ export class AgentRuntime {
     void store.patchSession(this.record.id, { lastActiveAt: new Date().toISOString(), status: eventStatus ?? (this.workRequested ? "working" : "running") }).catch(() => undefined);
     if (eventStatus) this.publishStatus(eventStatus);
     setImmediate(() => wsHub.publishSession(this.record.id, { type: "agent_event", event: message }));
+  }
+
+  private handleExtensionUiRequest(message: any) {
+    if (message.method === "notify") {
+      wsHub.publishSession(this.record.id, { type: "extension_ui", request: message });
+      const text = typeof message.message === "string" ? message.message : "";
+      if (text) wsHub.publishSession(this.record.id, { type: "agent_event", event: { type: "extension_notify", notifyType: message.notifyType ?? "info", message: text } });
+      return;
+    }
+    wsHub.publishSession(this.record.id, { type: "extension_ui", request: message });
+    if (message.method === "setStatus" || message.method === "setWidget" || message.method === "setTitle" || message.method === "set_editor_text") return;
+    const response = { type: "extension_ui_response", id: message.id, cancelled: true };
+    this.stream?.write(`${JSON.stringify(response)}\n`, "utf8");
   }
 
   private fail(error: unknown) {

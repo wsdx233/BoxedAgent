@@ -19,7 +19,7 @@ const RIGHT_PANEL_TABS: Array<{ id: RightPanelTab; label: string; icon: typeof T
   { id: "code", label: "code-server", icon: Code2 }
 ];
 
-export function RightPanel({ box, boxes = [], sessionId, onRefresh }: { box?: BoxRecord; boxes?: BoxRecord[]; sessionId?: string; onRefresh: () => void }) {
+export function RightPanel({ box, boxes = [], sessionId, sessionCwd, onRefresh }: { box?: BoxRecord; boxes?: BoxRecord[]; sessionId?: string; sessionCwd?: string; onRefresh: () => void }) {
   const [tab, setTab] = useState<RightPanelTab>("terminal");
   const boxId = box?.id;
   return <aside className="rightbar">
@@ -35,7 +35,7 @@ export function RightPanel({ box, boxes = [], sessionId, onRefresh }: { box?: Bo
     {tab === "terminal" && <div className="panel terminal-panel"><TerminalPane boxId={boxId} /></div>}
     {tab === "files" && <FileBrowser key={boxId ?? "none"} boxId={boxId} />}
     {tab === "pi" && <PiSettingsPane box={box} onSaved={onRefresh} />}
-    {tab === "extensions" && <PiExtensionsPane box={box} boxes={boxes} sessionId={sessionId} onSessionReloaded={onRefresh} />}
+    {tab === "extensions" && <PiExtensionsPane box={box} boxes={boxes} sessionId={sessionId} sessionCwd={sessionCwd} onSessionReloaded={onRefresh} />}
     {tab === "ports" && <PortMappingsPane box={box} onRefresh={onRefresh} />}
     {tab === "code" && <div className="panel">
       {boxId ? <>

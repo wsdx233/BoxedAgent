@@ -1,4 +1,4 @@
-import type { AgentSessionRecord, BoxPortMapping, BoxRecord, FileEntry, PiBoxConfig, PiExtensionRecord, PiExtensionScope, PiModel, SessionStats, SessionTree, ThinkingLevel } from "./types";
+import type { AgentSessionRecord, BoxPortMapping, BoxRecord, FileEntry, PiBoxConfig, PiExtensionRecord, PiExtensionScope, PiLoadedResources, PiModel, SessionStats, SessionTree, ThinkingLevel } from "./types";
 
 async function request<T>(url: string, init?: RequestInit): Promise<T> {
   const headers = new Headers(init?.headers);
@@ -48,6 +48,7 @@ export const api = {
   deletePiExtension: (boxId: string, scope: PiExtensionScope, name: string, cwd = "/workspace") => request<{ ok: boolean; message: string }>(`/api/boxes/${boxId}/pi-extensions/${scope}/${encodeURIComponent(name)}?cwd=${encodeURIComponent(cwd)}`, { method: "DELETE" }),
   migratePiExtensions: (boxId: string, body: { targetBoxIds: string[]; names?: string[]; sourceScope: PiExtensionScope; targetScope: PiExtensionScope; sourceCwd?: string; targetCwd?: string; overwrite?: boolean }) => request<{ ok: boolean; migrated: Array<{ targetBoxId: string; extensions: PiExtensionRecord[] }>; message: string }>(`/api/boxes/${boxId}/pi-extensions/migrate`, { method: "POST", body: JSON.stringify(body) }),
   piInstallPackage: (boxId: string, body: { source: string; scope: PiExtensionScope; cwd?: string }) => request<{ ok: boolean; stdout: string; stderr: string; message: string }>(`/api/boxes/${boxId}/pi-extensions/pi-install`, { method: "POST", body: JSON.stringify(body) }),
+  piRemovePackage: (boxId: string, body: { source: string; scope: PiExtensionScope; cwd?: string }) => request<{ ok: boolean; stdout: string; stderr: string; message: string }>(`/api/boxes/${boxId}/pi-extensions/pi-remove`, { method: "POST", body: JSON.stringify(body) }),
 
   getCurrentSession: () => request<{ sessionId?: string; activeSessionId?: string; boxId?: string; session?: AgentSessionRecord }>("/api/current-session"),
   setCurrentSession: (sessionId?: string) => request<{ ok: boolean; sessionId?: string; activeSessionId?: string; boxId?: string; session?: AgentSessionRecord }>("/api/current-session", { method: sessionId ? "PUT" : "DELETE", body: sessionId ? JSON.stringify({ sessionId }) : undefined }),
@@ -70,6 +71,7 @@ export const api = {
   message: (id: string, messageId: string) => request<{ message: any }>(`/api/sessions/${id}/messages/${encodeURIComponent(messageId)}`),
   sessionState: (id: string) => request<{ state: any }>(`/api/sessions/${id}/state`),
   sessionStats: (id: string) => request<{ stats: SessionStats | null }>(`/api/sessions/${id}/stats`),
+  sessionResources: (id: string) => request<{ resources: PiLoadedResources }>(`/api/sessions/${id}/resources`),
   sessionModels: (id: string) => request<{ models: PiModel[] }>(`/api/sessions/${id}/models`),
   setSessionModel: (id: string, body: { provider: string; modelId: string }) => request<{ session: AgentSessionRecord; model?: PiModel | null }>(`/api/sessions/${id}/model`, { method: "PATCH", body: JSON.stringify(body) }),
   setSessionThinking: (id: string, level: ThinkingLevel) => request<{ session: AgentSessionRecord; state?: any }>(`/api/sessions/${id}/thinking`, { method: "PATCH", body: JSON.stringify({ level }) }),

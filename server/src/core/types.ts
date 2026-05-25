@@ -67,6 +67,7 @@ export interface AgentSessionRecord {
   autoCompactionEnabled?: boolean;
   sessionFile?: string;
   error?: string;
+  loadedResources?: PiLoadedResources;
 }
 
 export interface PiModel {
@@ -78,6 +79,34 @@ export interface PiModel {
   contextWindow?: number;
   maxTokens?: number;
   [key: string]: unknown;
+}
+
+export type PiResourceScope = "box" | "workspace" | "package" | "path";
+export type PiResourceKind = "context" | "package" | "extension" | "skill" | "prompt" | "theme";
+
+export interface PiLoadedResourceItem {
+  name: string;
+  path: string;
+  scope: PiResourceScope;
+  kind: PiResourceKind;
+  type?: string;
+  source?: string;
+  description?: string;
+  entrypoint?: string;
+  size?: number;
+}
+
+export interface PiLoadedResources {
+  cwd: string;
+  reason?: "startup" | "reload" | "manual";
+  generatedAt: string;
+  contextFiles: PiLoadedResourceItem[];
+  packages: PiLoadedResourceItem[];
+  extensions: PiLoadedResourceItem[];
+  skills: PiLoadedResourceItem[];
+  prompts: PiLoadedResourceItem[];
+  themes: PiLoadedResourceItem[];
+  diagnostics: string[];
 }
 
 export interface SessionStats {

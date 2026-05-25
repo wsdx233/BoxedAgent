@@ -113,6 +113,8 @@ export async function registerSessionRoutes(app: FastifyInstance) {
 
   app.get("/api/sessions/:sessionId/stats", async (req) => ({ stats: await agentManager.stats((req.params as any).sessionId) }));
 
+  app.get("/api/sessions/:sessionId/resources", async (req) => ({ resources: await agentManager.loadedResources((req.params as any).sessionId) }));
+
   app.get("/api/sessions/:sessionId/messages", async (req) => {
     const query = z.object({ expand: z.string().optional() }).parse(req.query ?? {});
     const expandedMessageIds = parseMessageIdList(query.expand);
