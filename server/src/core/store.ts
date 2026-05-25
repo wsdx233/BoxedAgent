@@ -40,6 +40,11 @@ export class Store {
     if (shouldPersist && next.imageProfiles.length === 0) {
       next.imageProfiles = await createDefaultImageProfiles();
     }
+    const migratedProfiles = next.imageProfiles.map((profile) => migrateBuiltInImageProfile(profile));
+    if (JSON.stringify(migratedProfiles) !== JSON.stringify(next.imageProfiles)) {
+      next.imageProfiles = migratedProfiles;
+      shouldPersist = true;
+    }
     this.state = next;
     if (shouldPersist) await this.persist(next);
   }
@@ -399,6 +404,18 @@ function cloneImageProfile(profile: ImageProfileRecord): ImageProfileRecord {
   return JSON.parse(JSON.stringify(normalized)) as ImageProfileRecord;
 }
 
+function migrateBuiltInImageProfile(profile: ImageProfileRecord): ImageProfileRecord {
+  if (profile.id !== "profile_cuda_torch") return profile;
+  if (profile.dockerfile === cudaTorchDockerfileLegacy()) {
+    return normalizeImageProfile({
+      ...profile,
+      description: "基于默认 Ubuntu Dev，创建 /opt/torch-venv 并安装 PyTorch CUDA wheel；启动配置启用 NVIDIA GPU 和较大的 shm。宿主机需 NVIDIA Container Toolkit。",
+      dockerfile: cudaTorchDockerfile()
+    });
+  }
+  return profile;
+}
+
 async function createDefaultImageProfiles(): Promise<ImageProfileRecord[]> {
   const now = new Date().toISOString();
   const defaultDockerfile = await fs.readFile(path.join(paths.rootDir, "docker", "box.Dockerfile"), "utf8").catch(() => `FROM ${env.BOX_IMAGE}\n`);
@@ -448,7 +465,7 @@ async function createDefaultImageProfiles(): Promise<ImageProfileRecord[]> {
     normalizeImageProfile({
       id: "profile_cuda_torch",
       name: "CUDA Torch 24.04",
-      description: "基于默认 Ubuntu Dev，安装 PyTorch CUDA wheel；启动配置启用 NVIDIA GPU 和较大的 shm。宿主机需 NVIDIA Container Toolkit。",
+      description: "基于默认 Ubuntu Dev，创建 /opt/torch-venv 并安装 PyTorch CUDA wheel；启动配置启用 NVIDIA GPU 和较大的 shm。宿主机需 NVIDIA Container Toolkit。",
       image: "boxedagent/cuda-torch:24.04",
       baseImage: env.BOX_IMAGE,
       dockerfile: cudaTorchDockerfile(),
@@ -496,6 +513,24 @@ RUN apt-get update \\
 }
 
 function cudaTorchDockerfile(): string {
+  return `ARG BASE_IMAGE=${env.BOX_IMAGE}
+FROM \${BASE_IMAGE}
+
+ENV TORCH_VENV=/opt/torch-venv
+ENV PATH="\${TORCH_VENV}/bin:\${PATH}"
+
+RUN python3 -m venv \${TORCH_VENV} \\
+  && \${TORCH_VENV}/bin/python -m pip install --upgrade pip \\
+  && \${TORCH_VENV}/bin/pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu124 \\
+  && \${TORCH_VENV}/bin/python - <<'PY'
+import torch
+print('torch', torch.__version__)
+print('cuda available', torch.cuda.is_available())
+PY
+`;
+}
+
+function cudaTorchDockerfileLegacy(): string {
   return `ARG BASE_IMAGE=${env.BOX_IMAGE}
 FROM \${BASE_IMAGE}
 
