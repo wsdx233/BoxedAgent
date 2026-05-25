@@ -38,11 +38,45 @@ export interface BoxPortMapping {
   updatedAt: string;
 }
 
+export interface ContainerGpuConfig {
+  enabled: boolean;
+  count?: number | "all";
+  deviceIds?: string[];
+}
+
+export interface ContainerDeviceMapping {
+  pathOnHost: string;
+  pathInContainer?: string;
+  cgroupPermissions?: string;
+}
+
+export interface ContainerBindMount {
+  source: string;
+  target: string;
+  readonly?: boolean;
+}
+
+export interface ContainerStartupConfig {
+  workingDir?: string;
+  user?: string;
+  startupScript?: string;
+  env?: Record<string, string>;
+  extraHosts?: string[];
+  shmSizeMb?: number;
+  gpu?: ContainerGpuConfig;
+  devices?: ContainerDeviceMapping[];
+  privileged?: boolean;
+  capAdd?: string[];
+  mounts?: ContainerBindMount[];
+  exposedPorts?: number[];
+}
+
 export interface BoxRecord {
   id: string;
   name: string;
   description?: string;
   image: string;
+  imageProfileId?: string;
   workspacePath: string;
   env: Record<string, string>;
   labels: Record<string, string>;
@@ -52,12 +86,55 @@ export interface BoxRecord {
   codeServerPassword?: string;
   portMappings: BoxPortMapping[];
   pi: PiBoxConfig;
+  startup: ContainerStartupConfig;
   containerId?: string;
   status: BoxStatus;
   createdAt: string;
   updatedAt: string;
   lastActiveAt?: string;
   error?: string;
+}
+
+export interface ImageBuildContextFile {
+  path: string;
+  content: string;
+  mode?: number;
+}
+
+export interface ImageBuildConfig {
+  buildArgs?: Record<string, string>;
+  platform?: string;
+  target?: string;
+  noCache?: boolean;
+  pull?: boolean;
+  contextFiles?: ImageBuildContextFile[];
+}
+
+export type ImageProfileStatus = "draft" | "building" | "ready" | "error";
+
+export interface ImageProfileRecord {
+  id: string;
+  name: string;
+  description?: string;
+  image: string;
+  baseImage?: string;
+  dockerfile: string;
+  build: ImageBuildConfig;
+  boxDefaults: {
+    env?: Record<string, string>;
+    labels?: Record<string, string>;
+    memoryMb?: number;
+    cpus?: number;
+    enableCodeServer?: boolean;
+    codeServerPassword?: string;
+    pi?: PiBoxConfig;
+    startup?: ContainerStartupConfig;
+  };
+  status: ImageProfileStatus;
+  error?: string;
+  lastBuiltAt?: string;
+  createdAt: string;
+  updatedAt: string;
 }
 
 export type AgentSessionStatus = "idle" | "starting" | "running" | "working" | "stopped" | "error";

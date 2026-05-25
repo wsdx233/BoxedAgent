@@ -122,6 +122,26 @@ curl -H "Authorization: Bearer $BOXEDAGENT_TOKEN" http://localhost:8080/api/boxe
 - `GET /api/images/status?image=boxedagent%2Fubuntu-dev%3A24.04`
 - `POST /api/images/ensure`：检查并构建/拉取镜像。
 
+### 镜像模板 / Box 模板
+
+Web UI 左上角 “镜像编辑器” 可编辑 Dockerfile、build args、构建 context 文本文件、Box 默认资源、环境变量、启动脚本、GPU、`/dev/kvm`、privileged、额外挂载以及 Pi 默认配置。创建 Box 时可直接选择保存好的模板；模板修改不会自动影响已有 Box。
+
+高级容器权限默认允许，可在 `.env` 中关闭：
+
+```env
+BOXEDAGENT_ALLOW_ADVANCED_CONTAINER_OPTIONS=false
+```
+
+API：
+
+- `GET /api/image-profiles`
+- `POST /api/image-profiles`
+- `PATCH /api/image-profiles/:profileId`
+- `DELETE /api/image-profiles/:profileId`
+- `POST /api/image-profiles/:profileId/duplicate`
+- `POST /api/image-profiles/:profileId/build`
+- `POST /api/image-profiles/:profileId/ensure`
+
 ### Box
 
 - `GET /api/boxes`
@@ -137,7 +157,8 @@ curl -H "Authorization: Bearer $BOXEDAGENT_TOKEN" http://localhost:8080/api/boxe
 ```json
 {
   "name": "frontend-box",
-  "image": "boxedagent/ubuntu-dev:24.04",
+  "imageProfileId": "profile_default_ubuntu_dev",
+  "buildImage": true,
   "enableCodeServer": true,
   "codeServerPassword": "boxedagent",
   "pi": {

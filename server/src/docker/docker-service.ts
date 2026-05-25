@@ -5,7 +5,7 @@ import path from "node:path";
 import { PassThrough, Readable } from "node:stream";
 import tar from "tar-stream";
 import { env, paths } from "../config/env.js";
-import type { BoxRecord, BoxSpec } from "../core/types.js";
+import type { BoxRecord, BoxSpec, ContainerBindMount, ContainerStartupConfig, ImageBuildContextFile, ImageProfileRecord } from "../core/types.js";
 import { badRequest, conflict, notFound } from "../core/errors.js";
 import { materializeBoxPiConfig, piRuntimeEnv } from "../agent/pi-config.js";
 import { wsHub } from "../ws/hub.js";
@@ -76,27 +76,55 @@ export class DockerService {
     return promise;
   }
 
+  async buildImageProfile(profile: ImageProfileRecord): Promise<ImageStatus> {
+    const image = profile.image.trim();
+    if (!image) throw badRequest("image tag is required");
+    const action = "build";
+    wsHub.publishGlobal({ type: "image_profile_build_start", profileId: profile.id, image, action });
+    if (profile.baseImage) await this.ensureImage(profile.baseImage);
+
+    const buildDir = path.join(paths.imageBuildsDir, profile.id.replace(/[^a-zA-Z0-9_.-]/g, "-"), String(Date.now()));
+    const contextRoot = path.resolve(buildDir);
+    try {
+      await fs.emptyDir(contextRoot);
+      await fs.writeFile(path.join(contextRoot, "Dockerfile"), profile.dockerfile || `FROM ${profile.baseImage || env.BOX_IMAGE}\n`, "utf8");
+      for (const file of profile.build.contextFiles ?? []) await this.writeBuildContextFile(contextRoot, file);
+      const src = await listBuildContextFiles(contextRoot);
+      const stream = await this.docker.buildImage({ context: contextRoot, src }, {
+        t: image,
+        dockerfile: "Dockerfile",
+        buildargs: profile.build.buildArgs,
+        platform: profile.build.platform,
+        target: profile.build.target,
+        nocache: profile.build.noCache,
+        pull: profile.build.pull
+      });
+      await this.followProgress(stream as unknown as NodeJS.ReadableStream, (message, raw) => wsHub.publishGlobal({ type: "image_profile_progress", profileId: profile.id, image, message, raw }));
+      await this.assertImageAvailable(image, "Docker build finished but the tagged image was not created");
+      wsHub.publishGlobal({ type: "image_profile_build_end", profileId: profile.id, image, action, source: "built" });
+      return { image, available: true, source: "built" };
+    } catch (error) {
+      wsHub.publishGlobal({ type: "image_profile_build_error", profileId: profile.id, image, action, error: error instanceof Error ? error.message : String(error) });
+      throw error;
+    } finally {
+      await fs.remove(contextRoot).catch(() => undefined);
+    }
+  }
+
   async createContainer(box: BoxRecord): Promise<string> {
     await materializeBoxPiConfig(box);
     await this.ensureImage(box.image);
     await fs.ensureDir(box.workspacePath);
+    assertAdvancedOptionsAllowed(box.startup);
     const name = this.containerName(box.id);
-    const envVars = Object.entries({
-      ...box.env,
-      ...Object.fromEntries(piRuntimeEnv(box, { stdioGuard: false }).map((entry) => {
-        const idx = entry.indexOf("=");
-        return [entry.slice(0, idx), entry.slice(idx + 1)];
-      })),
-      BOXEDAGENT_BOX_ID: box.id,
-      BOXEDAGENT_BOX_NAME: box.name,
-      BOXEDAGENT_CODE_SERVER: box.enableCodeServer ? "1" : "0",
-      PASSWORD: box.codeServerPassword ?? "boxedagent"
-    }).map(([k, v]) => `${k}=${v}`);
+    const envVars = this.containerEnv(box);
+    const exposedPorts = this.containerExposedPorts(box);
 
     const container = await this.docker.createContainer({
       Image: box.image,
       name,
-      WorkingDir: "/workspace",
+      WorkingDir: box.startup?.workingDir || "/workspace",
+      User: box.startup?.user,
       Tty: false,
       OpenStdin: false,
       Env: envVars,
@@ -105,17 +133,9 @@ export class DockerService {
         "boxedagent.boxId": box.id,
         ...box.labels
       },
-      ExposedPorts: box.enableCodeServer ? { "8081/tcp": {} } : undefined,
-      HostConfig: {
-        Binds: [`${box.workspacePath}:/workspace`],
-        AutoRemove: false,
-        Memory: box.memoryMb ? box.memoryMb * 1024 * 1024 : undefined,
-        NanoCpus: box.cpus ? Math.floor(box.cpus * 1_000_000_000) : undefined,
-        PortBindings: box.enableCodeServer ? { "8081/tcp": [{ HostIp: "127.0.0.1", HostPort: "" }] } : undefined,
-        SecurityOpt: ["no-new-privileges:false"],
-        ExtraHosts: ["host.docker.internal:host-gateway"]
-      },
-      Cmd: ["bash", "-lc", "mkdir -p /workspace ~/.local/share/code-server && if [ \"$BOXEDAGENT_CODE_SERVER\" = \"1\" ] && command -v code-server >/dev/null 2>&1; then code-server /workspace --bind-addr 0.0.0.0:8081 --auth password --disable-telemetry >/tmp/code-server.log 2>&1 & fi; sleep infinity"]
+      ExposedPorts: Object.keys(exposedPorts).length ? exposedPorts : undefined,
+      HostConfig: this.containerHostConfig(box),
+      Cmd: ["bash", "-lc", this.containerEntrypointScript(box)]
     });
     return container.id;
   }
@@ -381,6 +401,82 @@ shutil.move(src, dst)
     return container;
   }
 
+  private containerEnv(box: BoxRecord): string[] {
+    return Object.entries({
+      ...(box.env ?? {}),
+      ...(box.startup?.env ?? {}),
+      ...Object.fromEntries(piRuntimeEnv(box, { stdioGuard: false }).map((entry) => {
+        const idx = entry.indexOf("=");
+        return [entry.slice(0, idx), entry.slice(idx + 1)];
+      })),
+      BOXEDAGENT_BOX_ID: box.id,
+      BOXEDAGENT_BOX_NAME: box.name,
+      BOXEDAGENT_CODE_SERVER: box.enableCodeServer ? "1" : "0",
+      PASSWORD: box.codeServerPassword ?? "boxedagent"
+    }).map(([k, v]) => `${k}=${v}`);
+  }
+
+  private containerExposedPorts(box: BoxRecord): Record<string, Record<string, never>> {
+    const ports = new Set<number>(box.startup?.exposedPorts ?? []);
+    if (box.enableCodeServer) ports.add(8081);
+    return Object.fromEntries([...ports].filter((port) => Number.isInteger(port) && port >= 1 && port <= 65535).map((port) => [`${port}/tcp`, {}]));
+  }
+
+  private containerHostConfig(box: BoxRecord): Docker.HostConfig {
+    const startup = box.startup ?? {};
+    const portBindings = box.enableCodeServer ? { "8081/tcp": [{ HostIp: "127.0.0.1", HostPort: "" }] } : undefined;
+    const binds = [`${box.workspacePath}:/workspace`, ...this.startupMountBinds(startup.mounts ?? [])];
+    const hostConfig: Docker.HostConfig = {
+      Binds: binds,
+      AutoRemove: false,
+      Memory: box.memoryMb ? box.memoryMb * 1024 * 1024 : undefined,
+      NanoCpus: box.cpus ? Math.floor(box.cpus * 1_000_000_000) : undefined,
+      PortBindings: portBindings,
+      SecurityOpt: ["no-new-privileges:false"],
+      ExtraHosts: ["host.docker.internal:host-gateway", ...(startup.extraHosts ?? [])],
+      ShmSize: startup.shmSizeMb ? startup.shmSizeMb * 1024 * 1024 : undefined,
+      Privileged: startup.privileged,
+      CapAdd: startup.capAdd?.length ? startup.capAdd : undefined,
+      Devices: startup.devices?.length ? startup.devices.map((device) => ({
+        PathOnHost: device.pathOnHost,
+        PathInContainer: device.pathInContainer || device.pathOnHost,
+        CgroupPermissions: device.cgroupPermissions || "rwm"
+      })) : undefined
+    };
+    if (startup.gpu?.enabled) {
+      const deviceRequest: Docker.DeviceRequest = { Driver: "nvidia", Capabilities: [["gpu"]] };
+      if (startup.gpu.deviceIds?.length) deviceRequest.DeviceIDs = startup.gpu.deviceIds;
+      else if (startup.gpu.count === "all" || startup.gpu.count === undefined) deviceRequest.Count = -1;
+      else deviceRequest.Count = startup.gpu.count;
+      hostConfig.DeviceRequests = [deviceRequest];
+    }
+    return hostConfig;
+  }
+
+  private startupMountBinds(mounts: ContainerBindMount[]): string[] {
+    return mounts
+      .filter((mount) => mount.source && mount.target && mount.target !== "/workspace" && !mount.target.startsWith("/workspace/"))
+      .map((mount) => `${mount.source}:${mount.target}${mount.readonly ? ":ro" : ""}`);
+  }
+
+  private containerEntrypointScript(box: BoxRecord): string {
+    const userScript = box.startup?.startupScript?.trim();
+    return [
+      "set -e",
+      "mkdir -p /workspace ~/.local/share/code-server",
+      "if [ \"$BOXEDAGENT_CODE_SERVER\" = \"1\" ] && command -v code-server >/dev/null 2>&1; then code-server /workspace --bind-addr 0.0.0.0:8081 --auth password --disable-telemetry >/tmp/code-server.log 2>&1 & fi",
+      userScript ? `# BoxedAgent image profile startup script\n${userScript}` : "",
+      "sleep infinity"
+    ].filter(Boolean).join("\n");
+  }
+
+  private async writeBuildContextFile(root: string, file: ImageBuildContextFile): Promise<void> {
+    const target = safeBuildContextPath(root, file.path);
+    await fs.ensureDir(path.dirname(target));
+    await fs.writeFile(target, file.content ?? "", "utf8");
+    if (file.mode) await fs.chmod(target, file.mode);
+  }
+
   private async buildDefaultImage(image: string): Promise<void> {
     const context = path.join(paths.rootDir, "docker");
     const dockerfile = path.join(context, "box.Dockerfile");
@@ -396,7 +492,7 @@ shutil.move(src, dst)
     await this.assertImageAvailable(image, "Docker pull finished but the image is still unavailable");
   }
 
-  private followProgress(stream: NodeJS.ReadableStream): Promise<unknown> {
+  private followProgress(stream: NodeJS.ReadableStream, onProgress?: (message: string, raw: unknown) => void): Promise<unknown> {
     return new Promise((resolve, reject) => {
       let streamError: Error | undefined;
       const tail: string[] = [];
@@ -411,7 +507,8 @@ shutil.move(src, dst)
           if (line) {
             tail.push(line);
             if (tail.length > 30) tail.shift();
-            wsHub.publishGlobal({ type: "image_progress", message: line, raw: event });
+            if (onProgress) onProgress(line, event);
+            else wsHub.publishGlobal({ type: "image_progress", message: line, raw: event });
           }
         }
         if (event?.error || event?.errorDetail) {
@@ -495,6 +592,46 @@ function parseByteRange(rangeHeader: string | undefined, size: number): { start:
   return { start, end };
 }
 
+function assertAdvancedOptionsAllowed(startup?: ContainerStartupConfig): void {
+  if (env.BOXEDAGENT_ALLOW_ADVANCED_CONTAINER_OPTIONS) return;
+  const hasAdvanced = Boolean(
+    startup?.privileged ||
+    startup?.capAdd?.length ||
+    startup?.devices?.length ||
+    startup?.mounts?.length ||
+    startup?.gpu?.enabled ||
+    startup?.extraHosts?.length ||
+    startup?.shmSizeMb ||
+    startup?.user
+  );
+  if (hasAdvanced) throw badRequest("advanced container options are disabled by BOXEDAGENT_ALLOW_ADVANCED_CONTAINER_OPTIONS=0");
+}
+
+function safeBuildContextPath(root: string, relPath: string): string {
+  const normalized = path.posix.normalize(`/${relPath}`).replace(/^\/+/, "");
+  if (!normalized || normalized.startsWith("..") || path.isAbsolute(normalized)) throw badRequest("invalid build context file path");
+  const base = path.resolve(root);
+  const target = path.resolve(base, normalized);
+  const relative = path.relative(base, target);
+  if (relative.startsWith("..") || path.isAbsolute(relative)) throw badRequest("build context file path escapes context");
+  return target;
+}
+
+async function listBuildContextFiles(root: string): Promise<string[]> {
+  const out: string[] = [];
+  async function walk(dir: string, prefix = "") {
+    const entries = await fs.readdir(dir, { withFileTypes: true });
+    for (const entry of entries) {
+      const rel = prefix ? `${prefix}/${entry.name}` : entry.name;
+      const full = path.join(dir, entry.name);
+      if (entry.isDirectory()) await walk(full, rel);
+      else if (entry.isFile()) out.push(rel);
+    }
+  }
+  await walk(root);
+  return out;
+}
+
 export const dockerService = new DockerService();
 
 export function defaultBoxSpec(partial: Partial<BoxSpec> & { name: string }): BoxSpec {
@@ -502,6 +639,7 @@ export function defaultBoxSpec(partial: Partial<BoxSpec> & { name: string }): Bo
     name: partial.name,
     description: partial.description ?? "",
     image: partial.image ?? env.BOX_IMAGE,
+    imageProfileId: partial.imageProfileId,
     workspacePath: partial.workspacePath ?? path.join(paths.workspacesDir, partial.name.replace(/[^a-zA-Z0-9_.-]/g, "-")),
     env: partial.env ?? {},
     labels: partial.labels ?? {},
@@ -510,6 +648,7 @@ export function defaultBoxSpec(partial: Partial<BoxSpec> & { name: string }): Bo
     enableCodeServer: partial.enableCodeServer ?? true,
     codeServerPassword: partial.codeServerPassword ?? "boxedagent",
     portMappings: partial.portMappings ?? [],
-    pi: partial.pi ?? { defaultThinkingLevel: "medium", enabledModels: [], settingsJson: {}, modelsJson: {}, systemPrompt: "", appendSystemPrompt: "", agentsMd: "", extraArgs: [] }
+    pi: partial.pi ?? { defaultThinkingLevel: "medium", enabledModels: [], settingsJson: {}, modelsJson: {}, systemPrompt: "", appendSystemPrompt: "", agentsMd: "", extraArgs: [] },
+    startup: partial.startup ?? {}
   };
 }

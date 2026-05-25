@@ -1,4 +1,4 @@
-import type { AgentSessionRecord, BoxPortMapping, BoxRecord, FileEntry, PiBoxConfig, PiExtensionRecord, PiExtensionScope, PiLoadedResources, PiModel, SessionStats, SessionTree, ThinkingLevel } from "./types";
+import type { AgentSessionRecord, BoxPortMapping, BoxRecord, FileEntry, ImageProfileRecord, PiBoxConfig, PiExtensionRecord, PiExtensionScope, PiLoadedResources, PiModel, SessionStats, SessionTree, ThinkingLevel } from "./types";
 
 async function request<T>(url: string, init?: RequestInit): Promise<T> {
   const headers = new Headers(init?.headers);
@@ -19,8 +19,16 @@ export const api = {
   health: () => request<{ ok: boolean; docker: string; image?: unknown }>("/api/health"),
   imageStatus: (image: string) => request<{ image: string; available: boolean; source: string; error?: string }>(`/api/images/status?image=${encodeURIComponent(image)}`),
   ensureImage: (image: string) => request<{ image: string; available: boolean; source: string; error?: string }>("/api/images/ensure", { method: "POST", body: JSON.stringify({ image }) }),
+  listImageProfiles: () => request<{ profiles: ImageProfileRecord[]; advancedOptionsAllowed: boolean }>("/api/image-profiles"),
+  getImageProfile: (id: string) => request<ImageProfileRecord>(`/api/image-profiles/${id}`),
+  createImageProfile: (body: Omit<Partial<ImageProfileRecord>, "id" | "createdAt" | "updatedAt"> & { name: string; image: string; dockerfile: string }) => request<ImageProfileRecord>("/api/image-profiles", { method: "POST", body: JSON.stringify(body) }),
+  updateImageProfile: (id: string, body: Partial<ImageProfileRecord>) => request<ImageProfileRecord>(`/api/image-profiles/${id}`, { method: "PATCH", body: JSON.stringify(body) }),
+  deleteImageProfile: (id: string) => request<{ ok: boolean }>(`/api/image-profiles/${id}`, { method: "DELETE" }),
+  duplicateImageProfile: (id: string, body?: { name?: string; image?: string }) => request<ImageProfileRecord>(`/api/image-profiles/${id}/duplicate`, { method: "POST", body: JSON.stringify(body ?? {}) }),
+  buildImageProfile: (id: string) => request<{ profile: ImageProfileRecord; image: { image: string; available: boolean; source: string; error?: string } }>(`/api/image-profiles/${id}/build`, { method: "POST" }),
+  ensureImageProfile: (id: string) => request<{ profile: ImageProfileRecord; image: { image: string; available: boolean; source: string; error?: string } }>(`/api/image-profiles/${id}/ensure`, { method: "POST" }),
   listBoxes: () => request<{ boxes: BoxRecord[] }>("/api/boxes"),
-  createBox: (body: Partial<BoxRecord> & { name: string; autostart?: boolean }) => request<BoxRecord>("/api/boxes", { method: "POST", body: JSON.stringify(body) }),
+  createBox: (body: Partial<BoxRecord> & { name: string; autostart?: boolean; buildImage?: boolean }) => request<BoxRecord>("/api/boxes", { method: "POST", body: JSON.stringify(body) }),
   updateBox: (id: string, body: Partial<BoxRecord>) => request<BoxRecord>(`/api/boxes/${id}`, { method: "PATCH", body: JSON.stringify(body) }),
   duplicateBox: (id: string, body?: { name?: string; description?: string; autostart?: boolean }) => request<BoxRecord>(`/api/boxes/${id}/duplicate`, { method: "POST", body: JSON.stringify(body ?? {}) }),
   cloneBox: (id: string, body: { name: string; description?: string; autostart?: boolean }) => request<BoxRecord>(`/api/boxes/${id}/clone`, { method: "POST", body: JSON.stringify(body) }),

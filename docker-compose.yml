@@ -10,6 +10,7 @@ services:
       HOST: 0.0.0.0
       DATA_DIR: /var/lib/boxedagent
       BOX_IMAGE: boxedagent/ubuntu-dev:24.04
+      BOXEDAGENT_ALLOW_ADVANCED_CONTAINER_OPTIONS: ${BOXEDAGENT_ALLOW_ADVANCED_CONTAINER_OPTIONS:-true}
       # 公网部署必须设置访问 Token；建议使用：openssl rand -base64 32
       BOXEDAGENT_TOKEN: ${BOXEDAGENT_TOKEN:?set BOXEDAGENT_TOKEN in .env}
       SESSION_SECRET: ${SESSION_SECRET:-change-me-with-openssl-rand-base64-32}

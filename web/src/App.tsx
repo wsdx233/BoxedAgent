@@ -1,6 +1,7 @@
 import { type CSSProperties, type FormEvent, type PointerEvent as ReactPointerEvent, useEffect, useState } from "react";
 import { ChatPane } from "./components/ChatPane";
 import { CreateBoxModal } from "./components/CreateBoxModal";
+import { ImageProfileEditorModal } from "./components/ImageProfileEditorModal";
 import { RightPanel } from "./components/RightPanel";
 import { Sidebar } from "./components/Sidebar";
 import { api, closeWebSocketQuietly, wsUrl } from "./lib/api";
@@ -12,6 +13,7 @@ type MobilePanel = "boxes" | "chat" | "tools";
 
 export function App() {
   const [showCreate, setShowCreate] = useState(false);
+  const [showImageEditor, setShowImageEditor] = useState(false);
   const [health, setHealth] = useState<string>("checking");
   const [activity, setActivity] = useState<string>("");
   const [auth, setAuth] = useState<{ loading: boolean; enabled: boolean; authenticated: boolean }>({ loading: true, enabled: false, authenticated: false });
@@ -110,7 +112,7 @@ export function App() {
 
   return <>
     <div className={appClass} style={appStyle}>
-      <Sidebar onNewBox={() => setShowCreate(true)} onSessionSelected={() => setMobilePanel("chat")} />
+      <Sidebar onNewBox={() => setShowCreate(true)} onOpenImageEditor={() => setShowImageEditor(true)} onSessionSelected={() => setMobilePanel("chat")} />
       <div className="app-resizer left" role="separator" aria-label="调整 Boxes 宽度" onPointerDown={(event) => startResize("left", event)} />
       <ChatPane boxId={activeBoxId} sessionId={activeSessionId} />
       <div className="app-resizer right" role="separator" aria-label="调整 Tools 宽度" onPointerDown={(event) => startResize("right", event)} />
@@ -126,6 +128,7 @@ export function App() {
       <button type="button" className={mobilePanel === "tools" ? "active" : ""} onClick={() => setMobilePanel("tools")}><Wrench size={18} /><span>Tools</span></button>
     </nav>
     {auth.enabled && <button type="button" className="auth-logout" onClick={logout}><LogOut size={14} /> 退出</button>}
+    {showImageEditor && <ImageProfileEditorModal onClose={() => setShowImageEditor(false)} />}
     {showCreate && <CreateBoxModal onClose={() => setShowCreate(false)} onCreated={refresh} />}
   </>;
 }

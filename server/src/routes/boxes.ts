@@ -5,7 +5,7 @@ import { z } from "zod";
 import { store } from "../core/store.js";
 import { defaultBoxSpec, dockerService } from "../docker/docker-service.js";
 import { paths } from "../config/env.js";
-import type { BoxRecord } from "../core/types.js";
+import type { BoxRecord, BoxSpec, ContainerStartupConfig, ImageProfileRecord, PiBoxConfig } from "../core/types.js";
 import { wsHub } from "../ws/hub.js";
 import { listAvailableModelsForBox } from "../agent/model-probe.js";
 
@@ -22,10 +22,31 @@ const PiConfigSchema = z.object({
   extraArgs: z.array(z.string()).optional()
 });
 
+const StartupSchema = z.object({
+  workingDir: z.string().optional(),
+  user: z.string().optional(),
+  startupScript: z.string().optional(),
+  env: z.record(z.string()).optional(),
+  extraHosts: z.array(z.string()).optional(),
+  shmSizeMb: z.number().int().positive().optional(),
+  gpu: z.object({
+    enabled: z.boolean(),
+    count: z.union([z.literal("all"), z.number().int().positive()]).optional(),
+    deviceIds: z.array(z.string()).optional()
+  }).optional(),
+  devices: z.array(z.object({ pathOnHost: z.string().min(1), pathInContainer: z.string().optional(), cgroupPermissions: z.string().optional() })).optional(),
+  privileged: z.boolean().optional(),
+  capAdd: z.array(z.string()).optional(),
+  mounts: z.array(z.object({ source: z.string().min(1), target: z.string().min(1), readonly: z.boolean().optional() })).optional(),
+  exposedPorts: z.array(z.number().int().min(1).max(65535)).optional()
+});
+
 const CreateBox = z.object({
   name: z.string().min(1).max(80),
   description: z.string().optional(),
   image: z.string().optional(),
+  imageProfileId: z.string().optional(),
+  buildImage: z.boolean().default(true),
   env: z.record(z.string()).optional(),
   labels: z.record(z.string()).optional(),
   memoryMb: z.number().int().min(128).optional(),
@@ -33,10 +54,11 @@ const CreateBox = z.object({
   enableCodeServer: z.boolean().optional(),
   codeServerPassword: z.string().optional(),
   pi: PiConfigSchema.optional(),
+  startup: StartupSchema.optional(),
   autostart: z.boolean().default(true)
 });
 
-const PatchBox = CreateBox.partial().omit({ autostart: true }).extend({ workspacePath: z.string().optional() });
+const PatchBox = CreateBox.partial().omit({ autostart: true, buildImage: true }).extend({ workspacePath: z.string().optional() });
 
 function cloneJson<T>(value: T): T {
   return JSON.parse(JSON.stringify(value)) as T;
@@ -46,6 +68,54 @@ function duplicateBoxName(name: string): string {
   const suffix = "-copy";
   const base = name.trim() || "box";
   return `${base.slice(0, 80 - suffix.length)}${suffix}`;
+}
+
+function mergePiConfig(base?: PiBoxConfig, override?: PiBoxConfig): PiBoxConfig | undefined {
+  if (!base && !override) return undefined;
+  return {
+    ...(base ?? {}),
+    ...(override ?? {}),
+    settingsJson: { ...(base?.settingsJson ?? {}), ...(override?.settingsJson ?? {}) },
+    modelsJson: { ...(base?.modelsJson ?? {}), ...(override?.modelsJson ?? {}) },
+    enabledModels: override?.enabledModels ?? base?.enabledModels,
+    extraArgs: override?.extraArgs ?? base?.extraArgs
+  };
+}
+
+function mergeStartupConfig(base?: ContainerStartupConfig, override?: ContainerStartupConfig): ContainerStartupConfig | undefined {
+  if (!base && !override) return undefined;
+  return {
+    ...(base ?? {}),
+    ...(override ?? {}),
+    env: { ...(base?.env ?? {}), ...(override?.env ?? {}) },
+    extraHosts: override?.extraHosts ?? base?.extraHosts,
+    capAdd: override?.capAdd ?? base?.capAdd,
+    devices: override?.devices ?? base?.devices,
+    mounts: override?.mounts ?? base?.mounts,
+    exposedPorts: override?.exposedPorts ?? base?.exposedPorts,
+    gpu: override?.gpu ?? base?.gpu
+  };
+}
+
+function specInputFromProfile(body: z.infer<typeof CreateBox>, inheritedEnv: Record<string, string>, id: string): Partial<BoxSpec> & { name: string } {
+  const profile: ImageProfileRecord | undefined = body.imageProfileId ? store.getImageProfile(body.imageProfileId) : undefined;
+  const defaults = profile?.boxDefaults ?? {};
+  return {
+    ...defaults,
+    name: body.name,
+    description: body.description ?? profile?.description ?? "",
+    image: body.image || profile?.image,
+    imageProfileId: profile?.id,
+    workspacePath: path.join(paths.workspacesDir, id),
+    env: { ...inheritedEnv, ...(defaults.env ?? {}), ...(body.env ?? {}) },
+    labels: { ...(defaults.labels ?? {}), ...(body.labels ?? {}) },
+    memoryMb: body.memoryMb ?? defaults.memoryMb,
+    cpus: body.cpus ?? defaults.cpus,
+    enableCodeServer: body.enableCodeServer ?? defaults.enableCodeServer,
+    codeServerPassword: body.codeServerPassword ?? defaults.codeServerPassword,
+    pi: mergePiConfig(defaults.pi, body.pi),
+    startup: mergeStartupConfig(defaults.startup, body.startup)
+  };
 }
 
 export async function registerBoxRoutes(app: FastifyInstance) {
@@ -73,11 +143,28 @@ export async function registerBoxRoutes(app: FastifyInstance) {
     const id = store.newBoxId();
     const now = new Date().toISOString();
     const inheritedEnv = Object.fromEntries(["ANTHROPIC_API_KEY", "OPENAI_API_KEY", "GOOGLE_API_KEY", "GEMINI_API_KEY", "OPENROUTER_API_KEY", "XAI_API_KEY", "MISTRAL_API_KEY", "GROQ_API_KEY"].flatMap((k) => process.env[k] ? [[k, process.env[k]!]] : []));
-    const spec = defaultBoxSpec({ ...body, env: { ...inheritedEnv, ...(body.env ?? {}) }, workspacePath: path.join(paths.workspacesDir, id) });
+    const profile = body.imageProfileId ? store.getImageProfile(body.imageProfileId) : undefined;
+    const spec = defaultBoxSpec(specInputFromProfile(body, inheritedEnv, id));
     let box: BoxRecord = { id, ...spec, status: "creating", createdAt: now, updatedAt: now };
     box = await store.upsertBox(box);
     wsHub.publishGlobal({ type: "boxes_changed" });
     try {
+      if (profile && body.buildImage) {
+        const status = await dockerService.imageStatus(profile.image);
+        if (!status.available) {
+          await store.patchImageProfile(profile.id, { status: "building", error: undefined });
+          wsHub.publishGlobal({ type: "image_profiles_changed" });
+          try {
+            await dockerService.buildImageProfile(profile);
+            await store.patchImageProfile(profile.id, { status: "ready", error: undefined, lastBuiltAt: new Date().toISOString() });
+          } catch (error) {
+            await store.patchImageProfile(profile.id, { status: "error", error: error instanceof Error ? error.message : String(error) });
+            wsHub.publishGlobal({ type: "image_profiles_changed" });
+            throw error;
+          }
+          wsHub.publishGlobal({ type: "image_profiles_changed" });
+        }
+      }
       const containerId = await dockerService.createContainer(box);
       box = await store.patchBox(id, { containerId, status: "stopped" });
       if (body.autostart) {
@@ -90,6 +177,7 @@ export async function registerBoxRoutes(app: FastifyInstance) {
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       await store.patchBox(id, { status: "error", error: message });
+      wsHub.publishGlobal({ type: "boxes_changed" });
       throw error;
     }
   });
@@ -98,11 +186,14 @@ export async function registerBoxRoutes(app: FastifyInstance) {
     const boxId = (req.params as any).boxId as string;
     const body = PatchBox.parse(req.body);
     const current = store.getBox(boxId);
+    const patchBody = { ...body };
+    delete patchBody.imageProfileId;
     const next = await store.patchBox(boxId, {
-      ...body,
+      ...patchBody,
       env: body.env ? { ...current.env, ...body.env } : current.env,
       labels: body.labels ? { ...current.labels, ...body.labels } : current.labels,
-      pi: body.pi ? { ...current.pi, ...body.pi } : current.pi
+      pi: body.pi ? { ...current.pi, ...body.pi } : current.pi,
+      startup: body.startup ? mergeStartupConfig(current.startup, body.startup) : current.startup
     });
     wsHub.publishGlobal({ type: "boxes_changed" });
     wsHub.publishBox(boxId, { type: "box_updated", box: next });

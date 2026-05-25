@@ -1,6 +1,6 @@
 import { useEffect, useState, type FormEvent, type MouseEvent, type ReactNode } from "react";
 import { createPortal } from "react-dom";
-import { Boxes, Copy, Edit3, GitBranch, GitFork, MoreVertical, Play, Plus, RefreshCw, Square, Trash2 } from "lucide-react";
+import { Boxes, Copy, Edit3, GitBranch, GitFork, ImagePlus, MoreVertical, Play, Plus, RefreshCw, Square, Trash2 } from "lucide-react";
 import { api } from "../lib/api";
 import { useAppStore } from "../state/app";
 import type { AgentSessionRecord, BoxRecord, SessionTreeNode } from "../lib/types";
@@ -8,7 +8,7 @@ import { CreateSessionModal } from "./CreateSessionModal";
 
 type ContextTarget = { kind: "box"; id: string; x: number; y: number } | { kind: "session"; id: string; x: number; y: number };
 
-export function Sidebar({ onNewBox, onSessionSelected }: { onNewBox: () => void; onSessionSelected?: () => void }) {
+export function Sidebar({ onNewBox, onOpenImageEditor, onSessionSelected }: { onNewBox: () => void; onOpenImageEditor: () => void; onSessionSelected?: () => void }) {
   const { boxes, sessions, activeBoxId, activeSessionId, setActiveBox, setActiveSession, setBoxes, setSessions, setComposerDraft, clearMessages } = useAppStore();
   const [showCreateSession, setShowCreateSession] = useState(false);
   const [menu, setMenu] = useState<ContextTarget>();
@@ -68,7 +68,7 @@ export function Sidebar({ onNewBox, onSessionSelected }: { onNewBox: () => void;
   ] : [];
 
   return <aside className="sidebar">
-    <div className="header"><div className="logo"><Boxes size={18} /> BoxedAgent</div><button className="primary" onClick={onNewBox}><Plus size={15} /></button></div>
+    <div className="header"><div className="logo"><Boxes size={18} /> BoxedAgent</div><div className="row"><button className="icon-button compact-icon" title="镜像编辑器" onClick={onOpenImageEditor}><ImagePlus size={15} /></button><button className="primary compact-icon" title="创建 Box" onClick={onNewBox}><Plus size={15} /></button></div></div>
     <div className="sidebar-sections">
       <section className="sidebar-section boxes-section">
         <div className="sidebar-section-head"><strong>Boxes</strong><button className="icon-button compact-icon" title="刷新" onClick={refresh}><RefreshCw size={15} /></button></div>

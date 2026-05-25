@@ -6,6 +6,17 @@ import { z } from "zod";
 const rootDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
 loadDotEnvFile(path.join(rootDir, ".env"));
 
+const BooleanEnv = (defaultValue: boolean) => z.preprocess((value) => {
+  if (value === undefined || value === null || value === "") return defaultValue;
+  if (typeof value === "boolean") return value;
+  if (typeof value === "string") {
+    const normalized = value.trim().toLowerCase();
+    if (["1", "true", "yes", "y", "on"].includes(normalized)) return true;
+    if (["0", "false", "no", "n", "off"].includes(normalized)) return false;
+  }
+  return value;
+}, z.boolean());
+
 const EnvSchema = z.object({
   NODE_ENV: z.enum(["development", "test", "production"]).default("development"),
   PORT: z.coerce.number().int().min(1).max(65535).default(8080),
@@ -13,6 +24,7 @@ const EnvSchema = z.object({
   DATA_DIR: z.string().default(path.join(rootDir, "data")),
   BOX_IMAGE: z.string().default("boxedagent/ubuntu-dev:24.04"),
   DOCKER_SOCKET: z.string().default("/var/run/docker.sock"),
+  BOXEDAGENT_ALLOW_ADVANCED_CONTAINER_OPTIONS: BooleanEnv(true),
   PUBLIC_ORIGIN: z.string().optional(),
   BOXEDAGENT_TOKEN: z.string().optional(),
   AUTH_TOKEN: z.string().optional(),
@@ -34,6 +46,7 @@ export const paths = {
   stateFile: path.join(dataDir, "state.json"),
   workspacesDir: path.join(dataDir, "workspaces"),
   uploadsDir: path.join(dataDir, "uploads"),
+  imageBuildsDir: path.join(dataDir, "image-builds"),
   webDistDir
 };
 
@@ -41,6 +54,7 @@ export async function ensureDataDirs() {
   await fs.ensureDir(paths.dataDir);
   await fs.ensureDir(paths.workspacesDir);
   await fs.ensureDir(paths.uploadsDir);
+  await fs.ensureDir(paths.imageBuildsDir);
 }
 
 function resolveFromRoot(value: string) {
