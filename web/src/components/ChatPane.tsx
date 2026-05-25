@@ -1199,7 +1199,7 @@ function MessageBubble({ message, isLatest, isStreaming, boxId, isExpanding, isF
       {message.text ? message.role === "user" ? <UserMessageText text={message.text} /> : <MarkdownText text={message.text} streaming={isStreaming} /> : message.thinking ? null : <span className="muted">…</span>}
       {message.attachments?.length ? <AttachmentGallery attachments={message.attachments} boxId={boxId} /> : null}
       {truncation && <TruncationNotice meta={truncation} loading={isExpanding} onExpand={onExpand} />}
-      {message.role === "assistant" && <AssistantMessageActions message={message} isForking={isForking} isStreaming={isStreaming} onFork={onFork} onFullscreen={onFullscreen} />}
+      {message.role === "assistant" && message.text.trim() && <AssistantMessageActions message={message} isForking={isForking} isStreaming={isStreaming} onFork={onFork} onFullscreen={onFullscreen} />}
     </div>
   </article>;
 }
