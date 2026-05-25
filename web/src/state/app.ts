@@ -45,7 +45,10 @@ export const useAppStore = create<AppState>((set) => ({
   }),
   setActiveBox: (id) => set({ activeBoxId: id, activeSessionId: undefined }),
   setActiveSession: (id) => set({ activeSessionId: id }),
-  appendMessage: (sessionId, msg) => set((s) => ({ messagesBySession: { ...s.messagesBySession, [sessionId]: [...(s.messagesBySession[sessionId] ?? []), msg] } })),
+  appendMessage: (sessionId, msg) => set((s) => {
+    const list = s.messagesBySession[sessionId] ?? [];
+    return { messagesBySession: { ...s.messagesBySession, [sessionId]: [...list, withSourceIndex(list, msg)] } };
+  }),
   appendAssistantDelta: (sessionId, delta) => set((s) => ({ messagesBySession: { ...s.messagesBySession, [sessionId]: appendAssistantDeltaToList(s.messagesBySession[sessionId] ?? [], delta) } })),
   updateLastAssistant: (sessionId, delta) => set((s) => ({ messagesBySession: { ...s.messagesBySession, [sessionId]: appendAssistantDeltaToList(s.messagesBySession[sessionId] ?? [], { text: delta }) } })),
   updateLastAssistantThinking: (sessionId, delta) => set((s) => ({ messagesBySession: { ...s.messagesBySession, [sessionId]: appendAssistantDeltaToList(s.messagesBySession[sessionId] ?? [], { thinking: delta }) } })),
@@ -71,9 +74,25 @@ function appendAssistantDeltaToList(list: ChatMessage[], delta: { text?: string;
       thinking: delta.thinking === undefined ? last.thinking : `${last.thinking ?? ""}${delta.thinking}`
     };
   } else {
-    next.push({ id: newId(), role: "assistant", text: delta.text ?? "", thinking: delta.thinking, timestamp: Date.now() });
+    next.push({ id: newId(), role: "assistant", text: delta.text ?? "", thinking: delta.thinking, timestamp: Date.now(), sourceIndex: nextSourceIndex(next) });
   }
   return next;
+}
+
+function withSourceIndex(list: ChatMessage[], message: ChatMessage): ChatMessage {
+  if (message.role === "system" || message.sourceIndex !== undefined) return message;
+  return { ...message, sourceIndex: nextSourceIndex(list) };
+}
+
+function nextSourceIndex(list: ChatMessage[]): number {
+  let max = -1;
+  let missing = 0;
+  for (const message of list) {
+    if (message.role === "system") continue;
+    if (typeof message.sourceIndex === "number" && Number.isFinite(message.sourceIndex)) max = Math.max(max, message.sourceIndex);
+    else missing++;
+  }
+  return max >= 0 ? max + 1 : missing;
 }
 
 function upsertToolPatchesIntoList(list: ChatMessage[], items: Array<{ toolCallId: string; patch: Partial<ChatMessage> }>): ChatMessage[] {
@@ -90,7 +109,7 @@ function upsertToolPatchesIntoList(list: ChatMessage[], items: Array<{ toolCallI
     if (idx !== undefined) next[idx] = { ...next[idx], ...cleanPatch, timestamp: now };
     else {
       indexById.set(item.toolCallId, next.length);
-      next.push({ id: newId(), role: "tool", text: "", toolCallId: item.toolCallId, timestamp: now, ...cleanPatch });
+      next.push({ id: newId(), role: "tool", text: "", toolCallId: item.toolCallId, timestamp: now, sourceIndex: nextSourceIndex(next), ...cleanPatch });
     }
   }
   return next;

@@ -33,6 +33,13 @@ export async function readPiSessionActiveMessages(box: BoxRecord, sessionFile?: 
   return path.flatMap(entryToMessages);
 }
 
+export async function findVisibleEntryIdForActiveMessageIndex(box: BoxRecord, sessionFile: string | undefined, messageIndex: number): Promise<string | undefined> {
+  if (!Number.isInteger(messageIndex) || messageIndex < 0) return undefined;
+  const entries = await readSessionEntries(box, sessionFile);
+  const visibleMessages = activePath(entries).filter((entry) => entryToMessages(entry).length > 0);
+  return visibleMessages[messageIndex]?.id ? String(visibleMessages[messageIndex].id) : undefined;
+}
+
 export async function getPiSessionTree(box: BoxRecord, sessionFile?: string): Promise<PiSessionTree> {
   const entries = await readSessionEntries(box, sessionFile);
   const visibleEntries = visibleTreeEntries(entries);
@@ -73,6 +80,45 @@ export async function getPiSessionTree(box: BoxRecord, sessionFile?: string): Pr
   for (const root of children.get(null) ?? []) visit(root, 0);
 
   return { nodes, activeId, activePathIds, entryCount: visibleEntries.length };
+}
+
+export async function forkPiSessionFromEntry(box: BoxRecord, sessionFile: string | undefined, targetId: string): Promise<{ sessionFile: string; text?: string }> {
+  const hostPath = sessionHostPath(box, sessionFile);
+  if (!hostPath || !(await fs.pathExists(hostPath))) throw new Error("当前 Session 还没有可 fork 的 pi session 文件。");
+  const sep = hostPath.lastIndexOf("/");
+  if (sep <= 0) throw new Error("当前 Session 文件路径无效，无法 fork。");
+  const entries = await readSessionEntries(box, sessionFile);
+  const target = entries.find((entry) => entry.id === targetId);
+  if (!target) throw new Error("目标节点不存在或已不可用。");
+
+  const targetLeafId = target.type === "message" && target.message?.role === "user" ? target.parentId ?? null : targetId;
+  const path = targetLeafId ? branchEntries(entries, targetLeafId) : [];
+  if (targetLeafId && path.length === 0) throw new Error("目标节点不在当前 Session 历史中。");
+
+  const timestamp = new Date().toISOString();
+  const sessionId = generateSessionId();
+  const dir = hostPath.substring(0, sep);
+  const fileTimestamp = timestamp.replace(/[:.]/g, "-");
+  const nextHostPath = `${dir}/${fileTimestamp}_${sessionId}.jsonl`;
+  const containerFile = containerPathForHostSessionFile(box, nextHostPath, sessionFile);
+  const pathWithoutLabels = path.filter((entry) => entry.type !== "label");
+  const usedIds = new Set(pathWithoutLabels.map((entry) => String(entry.id)));
+  let labelParentId = pathWithoutLabels.at(-1)?.id ?? null;
+  const labelEntries = entries
+    .filter((entry) => entry.type === "label" && entry.targetId && usedIds.has(String(entry.targetId)))
+    .map((entry) => {
+      const id = generateEntryIdFromSet(usedIds);
+      usedIds.add(id);
+      const labelEntry = { ...entry, id, parentId: labelParentId };
+      labelParentId = id;
+      return labelEntry;
+    });
+  const sourceHeader = entries.find((entry) => entry.type === "session");
+  const header = { type: "session", version: 3, id: sessionId, timestamp, cwd: sourceHeader?.cwd || "/workspace", parentSession: sessionFile };
+  const lines = [header, ...pathWithoutLabels, ...labelEntries].map((entry) => JSON.stringify(entry)).join("\n");
+  await fs.ensureDir(dir);
+  await fs.writeFile(nextHostPath, `${lines}\n`, "utf8");
+  return { sessionFile: containerFile, text: target.type === "message" && target.message?.role === "user" ? userMessageText(target.message) : undefined };
 }
 
 export async function navigatePiSessionTree(box: BoxRecord, sessionFile: string | undefined, targetId: string): Promise<{ editorText?: string; activeId: string | null }> {
@@ -167,6 +213,32 @@ function entryMap(entries: SessionEntry[]): Map<string, SessionEntry> {
   return new Map(entries.filter((entry) => entry.id).map((entry) => [String(entry.id), entry]));
 }
 
+function branchEntries(entries: SessionEntry[], leafId: string): SessionEntry[] {
+  const byId = entryMap(entries);
+  const out: SessionEntry[] = [];
+  let current = byId.get(leafId);
+  const seen = new Set<string>();
+  while (current?.id && !seen.has(String(current.id))) {
+    seen.add(String(current.id));
+    if (current.type !== "session") out.unshift(current);
+    current = current.parentId ? byId.get(current.parentId) : undefined;
+  }
+  return out;
+}
+
+function generateSessionId(): string {
+  return crypto.randomUUID();
+}
+
+function containerPathForHostSessionFile(box: BoxRecord, hostPath: string, fallbackSessionFile?: string): string {
+  const root = box.workspacePath.replace(/\/+$|\\+$/g, "");
+  if (root && hostPath === root) return "/workspace";
+  if (root && hostPath.startsWith(`${root}/`)) return `/workspace/${hostPath.slice(root.length + 1)}`;
+  const fallback = fallbackSessionFile?.trim();
+  if (fallback?.includes("/")) return `${fallback.slice(0, fallback.lastIndexOf("/"))}/${hostPath.split("/").pop()}`;
+  return `/workspace/.pi-sessions/${hostPath.split("/").pop()}`;
+}
+
 function labelsByTarget(entries: SessionEntry[]): Map<string, string> {
   const labels = new Map<string, string>();
   for (const entry of entries) {
@@ -239,7 +311,10 @@ function contentText(content: any): string {
 }
 
 function generateEntryId(entries: SessionEntry[]): string {
-  const existing = new Set(entries.map((entry) => entry.id).filter(Boolean));
+  return generateEntryIdFromSet(new Set(entries.map((entry) => entry.id).filter((id): id is string => Boolean(id))));
+}
+
+function generateEntryIdFromSet(existing: Set<string>): string {
   let id = crypto.randomBytes(4).toString("hex");
   while (existing.has(id)) id = crypto.randomBytes(4).toString("hex");
   return id;

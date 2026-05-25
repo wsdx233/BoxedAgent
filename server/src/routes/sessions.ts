@@ -27,7 +27,8 @@ const AutoCompactionBody = z.object({ enabled: z.boolean() });
 const CompactBody = z.object({ customInstructions: z.string().optional() }).default({});
 const DuplicateBody = z.object({ name: z.string().optional(), autostart: z.boolean().optional() }).default({});
 const CloneBody = z.object({ name: z.string().optional() }).default({});
-const ForkBody = z.object({ entryId: z.string().min(1), name: z.string().optional() });
+const ForkBody = z.object({ entryId: z.string().min(1), name: z.string().optional(), useRuntime: z.boolean().optional() });
+const ForkMessageBody = z.object({ messageIndex: z.number().int().min(0), name: z.string().optional() });
 const TreeNavigateBody = z.object({ targetId: z.string().min(1) });
 const SelectedSessionBody = z.object({ sessionId: z.string().optional().nullable(), activeSessionId: z.string().optional().nullable() }).default({});
 const ACTIVE_SESSION_COOKIE = "boxedagent_active_session";
@@ -97,6 +98,11 @@ export async function registerSessionRoutes(app: FastifyInstance) {
   app.post("/api/sessions/:sessionId/fork", async (req) => {
     const body = ForkBody.parse(req.body ?? {});
     return agentManager.forkSession((req.params as any).sessionId, body);
+  });
+
+  app.post("/api/sessions/:sessionId/fork-message", async (req) => {
+    const body = ForkMessageBody.parse(req.body ?? {});
+    return agentManager.forkSessionFromMessageIndex((req.params as any).sessionId, body);
   });
 
   app.post("/api/sessions/:sessionId/prompt", async (req) => {

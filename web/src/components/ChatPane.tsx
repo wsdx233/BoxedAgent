@@ -1,8 +1,9 @@
 import { FormEvent, memo, type Dispatch, type DragEvent, type ElementType, type PointerEvent as ReactPointerEvent, type ReactNode, type SetStateAction, type TouchEvent as ReactTouchEvent, type WheelEvent as ReactWheelEvent, useEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import rehypeHighlight from "rehype-highlight";
-import { Archive, Bot, Brain, CheckCircle2, ChevronDown, CircleAlert, Copy, ExternalLink, Eye, FilePenLine, FilePlus2, FileSearch, FolderTree, ImageIcon, Loader2, Paperclip, RefreshCw, Search, Send, Sparkles, Square, Terminal, Wrench, X } from "lucide-react";
+import { Archive, Bot, Brain, CheckCircle2, ChevronDown, CircleAlert, Copy, ExternalLink, Eye, FilePenLine, FilePlus2, FileSearch, FolderTree, GitFork, ImageIcon, Loader2, Maximize2, Paperclip, RefreshCw, Search, Send, Sparkles, Square, Terminal, Wrench, X } from "lucide-react";
 import SiApachemaven from "@icons-pack/react-simple-icons/icons/SiApachemaven.mjs";
 import SiAstro from "@icons-pack/react-simple-icons/icons/SiAstro.mjs";
 import SiC from "@icons-pack/react-simple-icons/icons/SiC.mjs";
@@ -106,7 +107,9 @@ export function ChatPane({ boxId, sessionId }: { boxId?: string; sessionId?: str
     upsertToolMessages,
     setSessionMessages,
     setComposerDraft,
-    setSessions
+    setSessions,
+    setActiveSession,
+    clearMessages
   } = useAppStore();
   const [text, setText] = useState("");
   const [sendMode, setSendMode] = useState<SendMode>("normal");
@@ -129,6 +132,8 @@ export function ChatPane({ boxId, sessionId }: { boxId?: string; sessionId?: str
   const [uploadingFiles, setUploadingFiles] = useState(false);
   const [messagesLoading, setMessagesLoading] = useState(false);
   const [expandingMessageIds, setExpandingMessageIds] = useState<Set<string>>(() => new Set());
+  const [fullscreenMessage, setFullscreenMessage] = useState<ChatMessage>();
+  const [forkingMessageId, setForkingMessageId] = useState<string>();
   const messagesRef = useRef<HTMLDivElement>(null);
   const messagesContentRef = useRef<HTMLDivElement>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
@@ -160,8 +165,8 @@ export function ChatPane({ boxId, sessionId }: { boxId?: string; sessionId?: str
   }, [models, modelSearch]);
   const renderedMessages = useMemo(() => messages.map((m, idx) => {
     const isLatest = idx === messages.length - 1;
-    return <div key={m.id} id={messageDomId(m.id)} className="message-anchor-wrap"><MemoMessageBubble message={m} isLatest={isLatest} isStreaming={turnActive && isLatest} boxId={boxId} isExpanding={Boolean(m.transport?.messageId && expandingMessageIds.has(m.transport.messageId))} onExpand={expandMessage} /></div>;
-  }), [messages, boxId, expandingMessageIds, turnActive]);
+    return <div key={m.id} id={messageDomId(m.id)} className="message-anchor-wrap"><MemoMessageBubble message={m} isLatest={isLatest} isStreaming={turnActive && isLatest} boxId={boxId} isExpanding={Boolean(m.transport?.messageId && expandingMessageIds.has(m.transport.messageId))} isForking={forkingMessageId === m.id} onExpand={expandMessage} onFork={forkAssistantMessage} onFullscreen={setFullscreenMessage} /></div>;
+  }), [messages, boxId, expandingMessageIds, forkingMessageId, turnActive]);
   const userProgressKey = messages.filter((m) => m.role === "user").map((m) => `${m.id}:${m.text.length}:${m.attachments?.length ?? 0}`).join("|");
   const userProgressNodes = useMemo(() => messages.filter((m) => m.role === "user").map((m, idx) => ({ id: m.id, label: `#${idx + 1}`, text: m.text || attachmentSummary(m.attachments ?? []) })), [userProgressKey]);
 
@@ -272,6 +277,8 @@ export function ChatPane({ boxId, sessionId }: { boxId?: string; sessionId?: str
     let cancelled = false;
     setQueue({ steering: [], followUp: [] });
     setExpandingMessageIds(new Set());
+    setFullscreenMessage(undefined);
+    setForkingMessageId(undefined);
     expectingTurnRef.current = false;
     setTurnActive(false);
     const ws = new WebSocket(wsUrl(`/ws/sessions/${sessionId}/events`));
@@ -774,6 +781,41 @@ export function ChatPane({ boxId, sessionId }: { boxId?: string; sessionId?: str
     void refreshSessionStats(sessionId);
   }
 
+  async function forkAssistantMessage(message: ChatMessage) {
+    if (!sessionId || message.role !== "assistant" || forkingMessageId) return;
+    setForkingMessageId(message.id);
+    try {
+      const sourceIndex = await resolveAssistantForkSourceIndex(message);
+      if (sourceIndex === undefined) throw new Error("这条回复尚未写入历史，暂时不能分支。请等待回复完成后再试。");
+      const res = await api.forkMessage(sessionId, { messageIndex: sourceIndex, name: forkSessionName(session?.name ?? "Session") });
+      if (res.cancelled) return;
+      setSessions((await api.listSessions()).sessions);
+      clearMessages(res.session.id);
+      setActiveSession(res.session.id);
+      if (res.text) setComposerDraft(res.session.id, res.text);
+    } catch (err) {
+      appendMessage(sessionId, { id: newId(), role: "system", text: `Fork 失败：${err instanceof Error ? err.message : String(err)}`, timestamp: Date.now() });
+    } finally {
+      setForkingMessageId(undefined);
+    }
+  }
+
+  async function resolveAssistantForkSourceIndex(message: ChatMessage): Promise<number | undefined> {
+    if (!sessionId) return undefined;
+    try {
+      const res = await api.messages(sessionId);
+      const normalized = await normalizePiMessagesAsync(res.messages, () => false);
+      const assistantMessages = normalized.filter((item) => item.role === "assistant" && item.sourceIndex !== undefined);
+      const exact = assistantMessages.filter((item) => item.text === message.text && (!message.thinking || item.thinking === message.thinking)).at(-1);
+      if (exact?.sourceIndex !== undefined) return exact.sourceIndex;
+      const sameIndex = message.sourceIndex === undefined ? undefined : assistantMessages.find((item) => item.sourceIndex === message.sourceIndex);
+      if (sameIndex?.sourceIndex !== undefined) return sameIndex.sourceIndex;
+    } catch {
+      // Fall back to the local index assigned while rendering the current conversation.
+    }
+    return message.sourceIndex;
+  }
+
   async function refreshSessionStats(id = sessionId) {
     if (!id) return;
     try {
@@ -1045,6 +1087,7 @@ export function ChatPane({ boxId, sessionId }: { boxId?: string; sessionId?: str
         </div>
       </div>
     </form>
+    {fullscreenMessage && <MessageFullscreenDialog message={fullscreenMessage} onClose={() => setFullscreenMessage(undefined)} />}
   </div>;
 }
 
@@ -1146,7 +1189,7 @@ function EmptyChat({ title, subtitle }: { title: string; subtitle: string }) {
   </div>;
 }
 
-function MessageBubble({ message, isLatest, isStreaming, boxId, isExpanding, onExpand }: { message: ChatMessage; isLatest: boolean; isStreaming?: boolean; boxId?: string; isExpanding?: boolean; onExpand?: (messageId: string) => void }) {
+function MessageBubble({ message, isLatest, isStreaming, boxId, isExpanding, isForking, onExpand, onFork, onFullscreen }: { message: ChatMessage; isLatest: boolean; isStreaming?: boolean; boxId?: string; isExpanding?: boolean; isForking?: boolean; onExpand?: (messageId: string) => void; onFork?: (message: ChatMessage) => void; onFullscreen?: (message: ChatMessage) => void }) {
   const truncation = message.transport?.truncated ? message.transport : undefined;
   if (message.role === "tool") return <ToolCard message={message} isLatest={isLatest} isExpanding={isExpanding} onExpand={onExpand} />;
   if (message.role === "system") return <div className="system-line"><CircleAlert size={14} /> <MarkdownText text={message.text} />{truncation && <TruncationNotice meta={truncation} loading={isExpanding} onExpand={onExpand} />}</div>;
@@ -1156,11 +1199,45 @@ function MessageBubble({ message, isLatest, isStreaming, boxId, isExpanding, onE
       {message.text ? message.role === "user" ? <UserMessageText text={message.text} /> : <MarkdownText text={message.text} streaming={isStreaming} /> : message.thinking ? null : <span className="muted">…</span>}
       {message.attachments?.length ? <AttachmentGallery attachments={message.attachments} boxId={boxId} /> : null}
       {truncation && <TruncationNotice meta={truncation} loading={isExpanding} onExpand={onExpand} />}
+      {message.role === "assistant" && <AssistantMessageActions message={message} isForking={isForking} isStreaming={isStreaming} onFork={onFork} onFullscreen={onFullscreen} />}
     </div>
   </article>;
 }
 
 const MemoMessageBubble = memo(MessageBubble);
+
+function AssistantMessageActions({ message, isForking, isStreaming, onFork, onFullscreen }: { message: ChatMessage; isForking?: boolean; isStreaming?: boolean; onFork?: (message: ChatMessage) => void; onFullscreen?: (message: ChatMessage) => void }) {
+  const forkDisabled = isForking || isStreaming;
+  const forkTitle = isStreaming ? "回复完成后可创建分支" : "从这条回复创建分支";
+  return <div className="assistant-message-actions" aria-label="Assistant 回复操作">
+    <CopyIconButton text={message.text} title="复制 Markdown" />
+    <button type="button" className="message-action-icon" title={forkTitle} disabled={forkDisabled} onClick={() => onFork?.(message)}>{isForking ? <Loader2 size={15} className="spin" /> : <GitFork size={15} />}</button>
+    <button type="button" className="message-action-icon" title="放大显示" onClick={() => onFullscreen?.(message)}><Maximize2 size={15} /></button>
+  </div>;
+}
+
+function MessageFullscreenDialog({ message, onClose }: { message: ChatMessage; onClose: () => void }) {
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape") onClose();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onClose]);
+
+  return createPortal(<div className="modal-backdrop message-fullscreen-backdrop" onMouseDown={onClose}>
+    <div className="modal message-fullscreen-modal" onMouseDown={(event) => event.stopPropagation()}>
+      <div className="message-fullscreen-head">
+        <div><strong>Assistant 回复</strong><small>Markdown 放大预览</small></div>
+        <div className="message-fullscreen-actions"><CopyButton text={message.text} /><button type="button" className="icon-button compact-icon" title="关闭" onClick={onClose}><X size={15} /></button></div>
+      </div>
+      <div className="message-fullscreen-body">
+        {message.thinking && <ThinkingBlock text={message.thinking} autoOpen={false} />}
+        {message.text ? <MarkdownText text={message.text} /> : <span className="muted">…</span>}
+      </div>
+    </div>
+  </div>, document.body);
+}
 
 function TruncationNotice({ meta, loading, onExpand }: { meta: NonNullable<ChatMessage["transport"]>; loading?: boolean; onExpand?: (messageId: string) => void }) {
   if (!meta.truncated) return null;
@@ -1836,6 +1913,16 @@ function MarkdownPre({ children, node: _node, ...props }: any) {
 }
 
 function CopyButton({ text }: { text: string }) {
+  const { copied, copy } = useCopyToClipboard(text);
+  return <button type="button" className="copy-button" onClick={copy}><Copy size={13} /> {copied ? "已复制" : "复制"}</button>;
+}
+
+function CopyIconButton({ text, title }: { text: string; title: string }) {
+  const { copied, copy } = useCopyToClipboard(text);
+  return <button type="button" className="message-action-icon" title={copied ? "已复制" : title} onClick={copy}><Copy size={15} /></button>;
+}
+
+function useCopyToClipboard(text: string) {
   const [copied, setCopied] = useState(false);
   async function copy() {
     try {
@@ -1855,7 +1942,7 @@ function CopyButton({ text }: { text: string }) {
       window.setTimeout(() => setCopied(false), 1200);
     }
   }
-  return <button type="button" className="copy-button" onClick={copy}><Copy size={13} /> {copied ? "已复制" : "复制"}</button>;
+  return { copied, copy };
 }
 
 function hasDraggedFiles(event: DragEvent<HTMLElement>) {
@@ -1888,21 +1975,22 @@ async function normalizePiMessagesAsync(messages: any[], isCancelled: () => bool
     const m = messages[idx];
     const transport = transportMeta(m);
     const timestamp = m.timestamp ?? Date.now();
+    const sourceIndex = idx;
     if (m.role === "user") {
       const imageAttachments = attachmentsFromContent(m.content);
       const expanded = extractInlineFileBlocks(contentToText(m.content) || m.message || "");
       const attachments = [...imageAttachments, ...expanded.attachments];
-      out.push({ id: `${idx}-${timestamp}`, role: "user", text: expanded.text || attachmentSummary(attachments), attachments, timestamp, transport });
+      out.push({ id: `${idx}-${timestamp}`, role: "user", text: expanded.text || attachmentSummary(attachments), attachments, timestamp, transport, sourceIndex });
       continue;
     }
     if (m.role === "assistant") {
       const { text, thinking, tools } = contentParts(m.content);
       const summary = m.summary ? `[summary]\n${m.summary}` : "";
       const errorText = piMessageErrorText(m);
-      if (text || thinking || summary) out.push({ id: `${idx}-${timestamp}-assistant`, role: "assistant", text: text || summary, thinking, timestamp, transport });
+      if (text || thinking || summary) out.push({ id: `${idx}-${timestamp}-assistant`, role: "assistant", text: text || summary, thinking, timestamp, transport, sourceIndex });
       if (errorText) out.push({ id: `${idx}-${timestamp}-assistant-error`, role: "system", text: runtimeNoticeText("pi 响应错误", errorText), timestamp, transport });
       tools.forEach((tool, toolIdx) => {
-        const toolMessage: ChatMessage = { id: `${idx}-${timestamp}-tool-${toolIdx}`, role: "tool", text: "", timestamp, transport, ...tool };
+        const toolMessage: ChatMessage = { id: `${idx}-${timestamp}-tool-${toolIdx}`, role: "tool", text: "", timestamp, transport, sourceIndex, ...tool };
         out.push(toolMessage);
         if (tool.toolCallId) toolCalls.set(String(tool.toolCallId), { tool, outIndex: out.length - 1 });
       });
@@ -1922,7 +2010,8 @@ async function normalizePiMessagesAsync(messages: any[], isCancelled: () => bool
       toolResult: contentToText(m.content) || resultToText(m.result) || JSON.stringify(m),
       toolResultMeta: toolResultMeta(m.result ?? m.content),
       timestamp,
-      transport
+      transport,
+      sourceIndex
     };
     if (priorEntry?.outIndex !== undefined) {
       out[priorEntry.outIndex] = { ...out[priorEntry.outIndex], ...toolMessage, id: out[priorEntry.outIndex].id, transport: transport ?? out[priorEntry.outIndex].transport };
@@ -1955,9 +2044,10 @@ function replaceExpandedMessage(current: ChatMessage[], messageId: string, expan
   if (start < 0) return current;
   let end = start + 1;
   while (end < current.length && current[end].transport?.messageId === messageId) end++;
+  const sourceIndex = current[start].sourceIndex;
   return [
     ...current.slice(0, start),
-    ...expanded.map((item, idx) => ({ ...item, id: idx === 0 ? current[start].id : `${current[start].id}-expanded-${idx}`, transport: { ...(item.transport ?? { messageId, truncated: false }), truncated: false } })),
+    ...expanded.map((item, idx) => ({ ...item, id: idx === 0 ? current[start].id : `${current[start].id}-expanded-${idx}`, sourceIndex: item.sourceIndex ?? sourceIndex, transport: { ...(item.transport ?? { messageId, truncated: false }), truncated: false } })),
     ...current.slice(end)
   ];
 }
@@ -2204,6 +2294,18 @@ async function uploadFilesToAttachmentDir(boxId: string, files: File[]): Promise
     uploaded.set(file, { path: uploadedPathForName(file.name) });
   }
   return uploaded;
+}
+
+function forkSessionName(name: string): string {
+  const base = name.trim() || "Session";
+  const match = /^(.*?)(\d+)$/.exec(base);
+  if (match) {
+    const [, prefix, digits] = match;
+    const next = (BigInt(digits) + 1n).toString();
+    return `${prefix}${next.padStart(digits.length, "0")}`;
+  }
+  const suffix = " fork";
+  return `${base.slice(0, 80 - suffix.length)}${suffix}`;
 }
 
 function uploadedPathForName(name: string) {

@@ -3,7 +3,7 @@ import { store } from "../core/store.js";
 import { AgentRuntime, type PromptPayload } from "./agent-runtime.js";
 import { wsHub } from "../ws/hub.js";
 import { readPiSessionMessage, readPiSessionMessages } from "./session-reader.js";
-import { getPiSessionTree, navigatePiSessionTree } from "./session-tree.js";
+import { findVisibleEntryIdForActiveMessageIndex, forkPiSessionFromEntry, getPiSessionTree, navigatePiSessionTree } from "./session-tree.js";
 import { conflict } from "../core/errors.js";
 import { getPiLoadedResourcesForSession } from "./pi-resources.js";
 
@@ -88,14 +88,27 @@ export class AgentManager {
     return runtime.forkMessages();
   }
 
-  async forkSession(id: string, input: { entryId: string; name?: string }): Promise<{ session: AgentSessionRecord; text?: string; cancelled?: boolean }> {
+  async forkSession(id: string, input: { entryId: string; name?: string; useRuntime?: boolean }): Promise<{ session: AgentSessionRecord; text?: string; cancelled?: boolean }> {
     const source = store.getSession(id);
     const box = store.getBox(source.boxId);
-    const runtime = await this.runtime(id);
-    const { result, state } = await runtime.fork(input.entryId);
-    if (result.cancelled) return { session: source, text: result.text, cancelled: true };
-    const saved = await this.createReboundSessionAfterRuntimeSwitch(source, box, runtime, state, input.name?.trim() || `${source.name} fork`);
-    return { session: saved, text: result.text, cancelled: false };
+    if (input.useRuntime !== false) {
+      const runtime = await this.runtime(id);
+      const { result, state } = await runtime.fork(input.entryId);
+      if (result.cancelled) return { session: source, text: result.text, cancelled: true };
+      const saved = await this.createReboundSessionAfterRuntimeSwitch(source, box, runtime, state, input.name?.trim() || `${source.name} fork`);
+      return { session: saved, text: result.text, cancelled: false };
+    }
+    const forked = await forkPiSessionFromEntry(box, source.sessionFile, input.entryId);
+    const saved = await this.createSessionFromForkedFile(source, forked.sessionFile, input.name?.trim() || `${source.name} fork`);
+    return { session: saved, text: forked.text, cancelled: false };
+  }
+
+  async forkSessionFromMessageIndex(id: string, input: { messageIndex: number; name?: string }): Promise<{ session: AgentSessionRecord; text?: string; cancelled?: boolean }> {
+    const source = store.getSession(id);
+    const box = store.getBox(source.boxId);
+    const entryId = await findVisibleEntryIdForActiveMessageIndex(box, source.sessionFile, input.messageIndex);
+    if (!entryId) throw conflict("Cannot find a persisted session entry for this message. Please wait until the response is saved, then try again.");
+    return this.forkSession(id, { entryId, name: input.name, useRuntime: false });
   }
 
   async cloneSession(id: string, input: { name?: string } = {}): Promise<{ session: AgentSessionRecord; cancelled?: boolean }> {
@@ -264,6 +277,28 @@ export class AgentManager {
     this.runtimes.set(saved.id, runtime);
     wsHub.publishBox(source.boxId, { type: "sessions_changed" });
     return store.getSession(saved.id);
+  }
+
+  private async createSessionFromForkedFile(source: AgentSessionRecord, sessionFile: string, name: string): Promise<AgentSessionRecord> {
+    const now = new Date().toISOString();
+    const session: AgentSessionRecord = {
+      id: store.newSessionId(),
+      boxId: source.boxId,
+      name,
+      status: "idle",
+      cwd: normalizeSessionCwd(source.cwd),
+      provider: source.provider,
+      model: source.model,
+      thinkingLevel: source.thinkingLevel,
+      autoCompactionEnabled: source.autoCompactionEnabled,
+      sessionFile,
+      createdAt: now,
+      updatedAt: now,
+      lastActiveAt: now
+    };
+    const saved = await store.upsertSession(session);
+    wsHub.publishBox(source.boxId, { type: "sessions_changed" });
+    return saved;
   }
 
   private async runtime(id: string): Promise<AgentRuntime> {

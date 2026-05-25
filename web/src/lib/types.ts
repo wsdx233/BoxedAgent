@@ -286,6 +286,7 @@ export interface ChatMessage {
   id: string;
   role: ChatMessageRole;
   text: string;
+  sourceIndex?: number;
   timestamp: number;
   attachments?: ChatAttachment[];
   thinking?: string;
