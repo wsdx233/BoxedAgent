@@ -1,4 +1,4 @@
-import { FormEvent, memo, type Dispatch, type DragEvent, type ElementType, type PointerEvent as ReactPointerEvent, type ReactNode, type SetStateAction, type TouchEvent as ReactTouchEvent, type WheelEvent as ReactWheelEvent, useEffect, useMemo, useRef, useState } from "react";
+import { FormEvent, memo, type Dispatch, type DragEvent, type ElementType, type KeyboardEvent as ReactKeyboardEvent, type PointerEvent as ReactPointerEvent, type ReactNode, type SetStateAction, type TouchEvent as ReactTouchEvent, type WheelEvent as ReactWheelEvent, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -50,7 +50,7 @@ import SiYaml from "@icons-pack/react-simple-icons/icons/SiYaml.mjs";
 import { api, closeWebSocketQuietly, wsUrl } from "../lib/api";
 import { COMPOSER_INSERT_EVENT, type ComposerInsertDetail } from "../lib/composer-events";
 import { newId } from "../lib/id";
-import type { AgentSessionRecord, ChatAttachment, ChatMessage, PiLoadedResources, PiModel, SessionStats, ThinkingLevel, ToolResultMeta } from "../lib/types";
+import type { AgentSessionRecord, ChatAttachment, ChatMessage, PiLoadedResources, PiModel, PiSlashCommand, SessionStats, ThinkingLevel, ToolResultMeta } from "../lib/types";
 import { useAppStore } from "../state/app";
 
 interface QueueState {
@@ -78,6 +78,24 @@ interface RuntimeOutputBufferState {
 
 type SendMode = "normal" | "steer" | "followUp";
 type MenuKey = "send" | "thinking" | "model" | "compact";
+type SlashCommandSource = "builtin" | "extension";
+
+interface SlashCommandSuggestion {
+  name: string;
+  description?: string;
+  source: SlashCommandSource;
+  path?: string;
+}
+
+interface SlashCompletionTrigger {
+  start: number;
+  end: number;
+  query: string;
+}
+
+const WEB_SLASH_COMMANDS: SlashCommandSuggestion[] = [
+  { name: "reload", source: "builtin", description: "Reload 当前 pi session：重新加载 extensions / skills / prompts / themes / context。" }
+];
 
 const SEND_MODES: Array<{ value: SendMode; label: string; description: string }> = [
   { value: "normal", label: "立即发送", description: "马上发送给当前 agent turn" },
@@ -113,6 +131,12 @@ export function ChatPane({ boxId, sessionId }: { boxId?: string; sessionId?: str
   } = useAppStore();
   const [text, setText] = useState("");
   const [sendMode, setSendMode] = useState<SendMode>("normal");
+  const [slashCommands, setSlashCommands] = useState<SlashCommandSuggestion[]>(WEB_SLASH_COMMANDS);
+  const [slashCommandsLoading, setSlashCommandsLoading] = useState(false);
+  const [slashCommandsError, setSlashCommandsError] = useState<string>();
+  const [slashActiveIndex, setSlashActiveIndex] = useState(0);
+  const [slashDismissedKey, setSlashDismissedKey] = useState<string>();
+  const [composerSelection, setComposerSelection] = useState({ start: 0, end: 0 });
   const [openMenu, setOpenMenu] = useState<MenuKey>();
   const [thinkingLevel, setThinkingLevel] = useState<ThinkingLevel>("medium");
   const [autoCompact, setAutoCompact] = useState(true);
@@ -138,7 +162,10 @@ export function ChatPane({ boxId, sessionId }: { boxId?: string; sessionId?: str
   const messagesContentRef = useRef<HTMLDivElement>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
   const composerRef = useRef<HTMLFormElement>(null);
+  const slashListRef = useRef<HTMLDivElement>(null);
+  const slashCommandsSessionRef = useRef<string>();
   const expectingTurnRef = useRef(false);
   const dragDepthRef = useRef(0);
   const stickToBottomRef = useRef(true);
@@ -155,6 +182,12 @@ export function ChatPane({ boxId, sessionId }: { boxId?: string; sessionId?: str
   const runtimeSubtitle = [currentModel.provider, currentModel.model, `thinking ${thinkingLevel}`, `compact ${autoCompact ? "auto" : "manual"}`].filter(Boolean).join(" · ");
   const isWorking = turnActive || session?.status === "working";
   const activityStatus = isWorking ? "working" : session?.status === "running" ? "running" : undefined;
+  const slashCompletion = useMemo(() => detectSlashCompletion(text, composerSelection.start, composerSelection.end), [text, composerSelection.start, composerSelection.end]);
+  const slashDismissKey = slashCompletion ? slashKeyForCompletion(slashCompletion) : undefined;
+  const slashSuggestions = useMemo(() => slashCompletion ? filterSlashCommands(slashCommands, slashCompletion.query) : [], [slashCommands, slashCompletion?.query, slashCompletion?.start, slashCompletion?.end]);
+  const activeSlashIndex = slashSuggestions.length ? Math.min(slashActiveIndex, slashSuggestions.length - 1) : 0;
+  const slashAutocompleteActive = Boolean(slashCompletion && slashDismissKey !== slashDismissedKey);
+  const slashPaletteOpen = Boolean(slashAutocompleteActive && (slashSuggestions.length > 0 || slashCommandsLoading || slashCommandsError));
 
   const visibleModels = useMemo(() => {
     const query = modelSearch.trim().toLowerCase();
@@ -230,6 +263,9 @@ export function ChatPane({ boxId, sessionId }: { boxId?: string; sessionId?: str
     setModels([]);
     setStats(null);
     setSendMode("normal");
+    resetSlashCommands();
+    setSlashActiveIndex(0);
+    setSlashDismissedKey(undefined);
     stickToBottomRef.current = true;
     if (!sessionId) return;
     const draft = useAppStore.getState().composerDrafts[sessionId];
@@ -238,6 +274,37 @@ export function ChatPane({ boxId, sessionId }: { boxId?: string; sessionId?: str
       setComposerDraft(sessionId, undefined);
     }
   }, [sessionId, setComposerDraft]);
+
+  useEffect(() => {
+    if (!sessionId || !slashAutocompleteActive) return;
+    if (slashCommandsSessionRef.current === sessionId || slashCommandsLoading) return;
+    let cancelled = false;
+    setSlashCommandsLoading(true);
+    setSlashCommandsError(undefined);
+    api.sessionCommands(sessionId).then((res) => {
+      if (cancelled) return;
+      slashCommandsSessionRef.current = sessionId;
+      setSlashCommands(mergeExtensionSlashCommands(res.commands ?? []));
+    }).catch((err) => {
+      if (cancelled) return;
+      slashCommandsSessionRef.current = sessionId;
+      setSlashCommands(WEB_SLASH_COMMANDS);
+      setSlashCommandsError(err instanceof Error ? err.message : String(err));
+    }).finally(() => {
+      if (!cancelled) setSlashCommandsLoading(false);
+    });
+    return () => { cancelled = true; };
+  }, [sessionId, slashAutocompleteActive]);
+
+  useEffect(() => {
+    setSlashActiveIndex(0);
+  }, [slashCompletion?.query, slashSuggestions.length]);
+
+  useEffect(() => {
+    if (!slashPaletteOpen || slashSuggestions.length === 0) return;
+    const item = slashListRef.current?.querySelector(`[data-slash-index="${activeSlashIndex}"]`) as HTMLElement | null;
+    item?.scrollIntoView({ block: "nearest" });
+  }, [slashPaletteOpen, activeSlashIndex, slashSuggestions.length]);
 
   useEffect(() => {
     setThinkingLevel(session?.thinkingLevel ?? "medium");
@@ -330,6 +397,7 @@ export function ChatPane({ boxId, sessionId }: { boxId?: string; sessionId?: str
       if (msg.type === "loaded_resources") {
         const resources = msg.resources as PiLoadedResources;
         patchSessionLocal({ loadedResources: resources, cwd: resources.cwd });
+        resetSlashCommands();
         appendLoadedResourcesNotice(sessionId, resources);
         return;
       }
@@ -431,6 +499,109 @@ export function ChatPane({ boxId, sessionId }: { boxId?: string; sessionId?: str
     return () => { cancelled = true; flushStreamBuffer(); flushRuntimeOutputBuffer(); closeWebSocketQuietly(ws); };
   }, [sessionId, appendMessage, setSessionMessages, appendAssistantDelta, upsertToolMessages]);
 
+  function resetSlashCommands() {
+    slashCommandsSessionRef.current = undefined;
+    setSlashCommands(WEB_SLASH_COMMANDS);
+    setSlashCommandsError(undefined);
+    setSlashCommandsLoading(false);
+  }
+
+  function updateComposerSelection(el = textareaRef.current) {
+    if (!el) return;
+    const next = { start: el.selectionStart, end: el.selectionEnd };
+    setComposerSelection((prev) => prev.start === next.start && prev.end === next.end ? prev : next);
+  }
+
+  function currentSlashCompletion() {
+    const el = textareaRef.current;
+    return el ? detectSlashCompletion(text, el.selectionStart, el.selectionEnd) : slashCompletion;
+  }
+
+  function applySlashCompletion(command: SlashCommandSuggestion) {
+    const trigger = currentSlashCompletion();
+    if (!trigger) return;
+    const nextText = `${text.slice(0, trigger.start)}/${command.name} ${text.slice(trigger.end)}`;
+    const cursor = trigger.start + command.name.length + 2;
+    setText(nextText);
+    setSlashDismissedKey(undefined);
+    setComposerSelection({ start: cursor, end: cursor });
+    window.requestAnimationFrame(() => {
+      const textarea = textareaRef.current;
+      if (!textarea) return;
+      textarea.focus();
+      textarea.setSelectionRange(cursor, cursor);
+      updateComposerSelection(textarea);
+    });
+  }
+
+  function isKnownExtensionCommandText(value: string): boolean {
+    const name = slashCommandNameFromText(value);
+    return Boolean(name && slashCommands.some((command) => command.source === "extension" && command.name === name));
+  }
+
+  function handleComposerKeyDown(e: ReactKeyboardEvent<HTMLTextAreaElement>) {
+    const trigger = currentSlashCompletion();
+    const key = trigger ? slashKeyForCompletion(trigger) : undefined;
+    const paletteAvailable = Boolean(trigger && key !== slashDismissedKey);
+    const items = trigger ? filterSlashCommands(slashCommands, trigger.query) : [];
+    const selectedIndex = items.length ? Math.min(slashActiveIndex, items.length - 1) : 0;
+    if (paletteAvailable && (items.length > 0 || slashCommandsLoading || slashCommandsError)) {
+      if (e.key === "ArrowDown") {
+        e.preventDefault();
+        setSlashActiveIndex((idx) => items.length ? (Math.min(idx, items.length - 1) + 1) % items.length : 0);
+        return;
+      }
+      if (e.key === "ArrowUp") {
+        e.preventDefault();
+        setSlashActiveIndex((idx) => items.length ? (Math.min(idx, items.length - 1) - 1 + items.length) % items.length : 0);
+        return;
+      }
+      if (e.key === "Tab") {
+        e.preventDefault();
+        if (items[selectedIndex]) applySlashCompletion(items[selectedIndex]);
+        return;
+      }
+      if (e.key === "Enter" && !e.shiftKey) {
+        const selected = items[selectedIndex];
+        const isExactCommand = Boolean(selected && trigger && selected.name.toLowerCase() === trigger.query.toLowerCase());
+        if (!isExactCommand) {
+          e.preventDefault();
+          if (selected) applySlashCompletion(selected);
+          return;
+        }
+      }
+      if (e.key === "Escape" && key) {
+        e.preventDefault();
+        setSlashDismissedKey(key);
+        return;
+      }
+    }
+    if (e.key === "Enter" && !e.shiftKey) {
+      e.preventDefault();
+      if (isWorking && canSend && !isKnownExtensionCommandText(text.trimEnd())) setOpenMenu("send");
+      else void submit(undefined, "normal");
+    }
+  }
+
+  async function settleExtensionCommandPrompt(targetSessionId: string) {
+    window.setTimeout(async () => {
+      if (targetSessionId !== useAppStore.getState().activeSessionId) return;
+      try {
+        const { state } = await api.sessionState(targetSessionId);
+        if (targetSessionId !== useAppStore.getState().activeSessionId) return;
+        const pendingCount = Number(state?.pendingMessageCount ?? 0);
+        applyRuntimeState(state);
+        if (!state?.isStreaming && !state?.isCompacting && pendingCount <= 0) {
+          expectingTurnRef.current = false;
+          setTurnActive(false);
+          patchSessionLocal({ id: targetSessionId, status: "running" as AgentSessionRecord["status"] });
+        }
+      } catch {
+        // The backend also performs an idle reconciliation for extension commands.
+      }
+    }, 420);
+  }
+
   async function submit(e?: FormEvent, modeOverride?: SendMode) {
     e?.preventDefault();
     if (!sessionId || !boxId || !canSend) return;
@@ -441,6 +612,7 @@ export function ChatPane({ boxId, sessionId }: { boxId?: string; sessionId?: str
         setText("");
         const res = await api.reloadSession(sessionId);
         patchSessionLocal(res.session);
+        resetSlashCommands();
         if (res.session.loadedResources) appendLoadedResourcesNotice(sessionId, res.session.loadedResources);
         else appendMessage(sessionId, { id: newId(), role: "system", text: "已 reload 当前 pi session：extensions / skills / prompts / themes 已重新加载。", timestamp: Date.now() });
         void syncRuntimeState();
@@ -461,15 +633,16 @@ export function ChatPane({ boxId, sessionId }: { boxId?: string; sessionId?: str
       appendMessage(sessionId, { id: newId(), role: "system", text: `读取 @文件引用失败：${err instanceof Error ? err.message : String(err)}`, timestamp: Date.now() });
       return;
     }
+    const isExtensionCommandMessage = images.length === 0 && fileAttachments.length === 0 && isKnownExtensionCommandText(message);
     const activeAtSubmit = isWorking;
-    const modeToUse = activeAtSubmit ? (modeOverride ?? sendMode) : "normal";
+    const modeToUse = activeAtSubmit ? (isExtensionCommandMessage ? "normal" : (modeOverride ?? sendMode)) : "normal";
     const extraImages = images
       .filter((img) => !img.path || !expanded.referencedPaths.has(img.path))
       .map(({ name: _name, path: _path, size: _size, ...img }) => img);
     const payload: any = { message: expanded.message, images: [...expanded.images, ...extraImages] };
     if (modeToUse !== "normal") payload.streamingBehavior = modeToUse;
     try {
-      if (activeAtSubmit && modeToUse === "normal") {
+      if (activeAtSubmit && modeToUse === "normal" && !isExtensionCommandMessage) {
         await api.abortSession(sessionId);
         expectingTurnRef.current = false;
         setTurnActive(false);
@@ -484,10 +657,12 @@ export function ChatPane({ boxId, sessionId }: { boxId?: string; sessionId?: str
       patchSessionLocal({ status: "working" as AgentSessionRecord["status"] });
       try {
         await api.prompt(sessionId, payload);
+        if (isExtensionCommandMessage) void settleExtensionCommandPrompt(sessionId);
       } catch (err) {
         if (modeToUse === "normal" && isAlreadyProcessingError(err)) {
           await api.abortSession(sessionId);
           await api.prompt(sessionId, payload);
+          if (isExtensionCommandMessage) void settleExtensionCommandPrompt(sessionId);
         } else {
           throw err;
         }
@@ -1020,11 +1195,16 @@ export function ChatPane({ boxId, sessionId }: { boxId?: string; sessionId?: str
         {queue.followUp.map((item, i) => <span key={`f-${i}`} className="queue-chip">Follow-up · {item}</span>)}
       </div>}
       <ComposerAttachmentStrip boxId={boxId} images={images} fileAttachments={fileAttachments} uploadingFiles={uploadingFiles} setImages={setImages} setFileAttachments={setFileAttachments} />
+      {slashPaletteOpen && <SlashCommandPalette commands={slashSuggestions} activeIndex={activeSlashIndex} loading={slashCommandsLoading} error={slashCommandsError} listRef={slashListRef} onActiveIndexChange={setSlashActiveIndex} onChoose={applySlashCompletion} />}
       <textarea
+        ref={textareaRef}
         value={text}
-        onChange={(e) => setText(e.target.value)}
+        onChange={(e) => { setText(e.target.value); updateComposerSelection(e.currentTarget); }}
+        onSelect={(e) => updateComposerSelection(e.currentTarget)}
+        onClick={(e) => updateComposerSelection(e.currentTarget)}
+        onKeyUp={(e) => updateComposerSelection(e.currentTarget)}
         placeholder="Message BoxedAgent…"
-        onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); if (isWorking && canSend) setOpenMenu("send"); else void submit(); } }}
+        onKeyDown={handleComposerKeyDown}
       />
       <div className="composer-toolbar">
         <div className="composer-tools">
@@ -1074,10 +1254,10 @@ export function ChatPane({ boxId, sessionId }: { boxId?: string; sessionId?: str
         </div>
 
         <div className="send-cluster">
-          <span className="send-mode-label">{isWorking ? (canSend ? "选择发送方式" : "停止生成") : "发送"}</span>
+          <span className="send-mode-label">{isWorking ? (canSend ? (isKnownExtensionCommandText(text.trimEnd()) ? "执行指令" : "选择发送方式") : "停止生成") : "发送"}</span>
           <div className="send-menu-anchor">
             {isWorking && !canSend ? <button type="button" className="send-fab stop-fab" title="中止当前任务" onClick={abortTurn}><Square size={19} /></button> : <>
-              <button type="button" className={`send-fab ${canSend ? "" : "idle"}`} title={isWorking ? "选择发送方式" : "发送"} onClick={() => { if (isWorking) toggleMenu("send"); else void submit(undefined, "normal"); }}><Send size={20} /></button>
+              <button type="button" className={`send-fab ${canSend ? "" : "idle"}`} title={isWorking && !isKnownExtensionCommandText(text.trimEnd()) ? "选择发送方式" : "发送"} onClick={() => { if (isWorking && !isKnownExtensionCommandText(text.trimEnd())) toggleMenu("send"); else void submit(undefined, "normal"); }}><Send size={20} /></button>
               {openMenu === "send" && isWorking && <MenuPanel className="send-menu">
                 <MenuTitle icon={<Send size={15} />} title="发送方式" subtitle="当前 agent 正在处理：立即发送会先中断当前 turn；Steer / Follow-up 会加入队列。" />
                 {SEND_MODES.map((item) => <MenuItem key={item.value} selected={sendMode === item.value} onClick={() => chooseSendMode(item.value)} title={item.label} description={item.value === "normal" ? "中断当前 turn，然后立即发送这条消息" : item.description} />)}
@@ -1089,6 +1269,105 @@ export function ChatPane({ boxId, sessionId }: { boxId?: string; sessionId?: str
     </form>
     {fullscreenMessage && <MessageFullscreenDialog message={fullscreenMessage} onClose={() => setFullscreenMessage(undefined)} />}
   </div>;
+}
+
+function SlashCommandPalette({ commands, activeIndex, loading, error, listRef, onActiveIndexChange, onChoose }: {
+  commands: SlashCommandSuggestion[];
+  activeIndex: number;
+  loading: boolean;
+  error?: string;
+  listRef: { current: HTMLDivElement | null };
+  onActiveIndexChange: (index: number) => void;
+  onChoose: (command: SlashCommandSuggestion) => void;
+}) {
+  return <div className="slash-command-palette" role="listbox" aria-label="可用 slash commands" onMouseDown={(event) => event.preventDefault()}>
+    <div className="slash-command-head">
+      <Terminal size={15} />
+      <div><strong>可用指令</strong><small>↑/↓ 选择，Tab 或 Enter 补全</small></div>
+      {loading && <Loader2 size={14} className="spin" />}
+    </div>
+    <div className="slash-command-list" ref={listRef}>
+      {commands.map((command, idx) => <button
+        type="button"
+        key={`${command.source}:${command.name}`}
+        data-slash-index={idx}
+        role="option"
+        aria-selected={idx === activeIndex}
+        className={`slash-command-item ${idx === activeIndex ? "active" : ""}`}
+        onMouseEnter={() => onActiveIndexChange(idx)}
+        onMouseDown={(event) => { event.preventDefault(); onChoose(command); }}
+      >
+        <span className="slash-command-name">/{command.name}</span>
+        <span className={`slash-command-source ${command.source}`}>{command.source === "builtin" ? "web" : "extension"}</span>
+        {command.description && <span className="slash-command-description">{command.description}</span>}
+        {!command.description && command.path && <span className="slash-command-description">{command.path}</span>}
+      </button>)}
+      {commands.length === 0 && !loading && <div className="slash-command-empty">没有匹配的 extension 指令。</div>}
+    </div>
+    {error && <div className="slash-command-error">插件指令加载失败，仅显示 /reload：{error}</div>}
+  </div>;
+}
+
+function detectSlashCompletion(value: string, selectionStart: number, selectionEnd: number): SlashCompletionTrigger | null {
+  if (selectionStart !== selectionEnd) return null;
+  const beforeCursor = value.slice(0, selectionStart);
+  const match = beforeCursor.match(/^\/([^\s/]*)$/);
+  if (!match) return null;
+  return { start: 0, end: selectionStart, query: match[1] ?? "" };
+}
+
+function slashKeyForCompletion(trigger: SlashCompletionTrigger): string {
+  return `${trigger.start}:${trigger.end}:${trigger.query}`;
+}
+
+function filterSlashCommands(commands: SlashCommandSuggestion[], query: string): SlashCommandSuggestion[] {
+  const normalized = query.trim().toLowerCase();
+  return commands
+    .map((command, index) => ({ command, index, score: slashCommandMatchScore(command.name, normalized) }))
+    .filter((item) => item.score < Number.POSITIVE_INFINITY)
+    .sort((a, b) => a.score - b.score || slashSourceOrder(a.command.source) - slashSourceOrder(b.command.source) || a.index - b.index)
+    .slice(0, 30)
+    .map((item) => item.command);
+}
+
+function slashCommandMatchScore(name: string, query: string): number {
+  if (!query) return 0;
+  const lower = name.toLowerCase();
+  if (lower === query) return 0;
+  if (lower.startsWith(query)) return 1;
+  if (lower.includes(query)) return 2;
+  return Number.POSITIVE_INFINITY;
+}
+
+function slashSourceOrder(source: SlashCommandSource): number {
+  return source === "builtin" ? 0 : 1;
+}
+
+function mergeExtensionSlashCommands(commands: PiSlashCommand[]): SlashCommandSuggestion[] {
+  const seen = new Set(WEB_SLASH_COMMANDS.map((command) => command.name.toLowerCase()));
+  const extensionCommands: SlashCommandSuggestion[] = [];
+  for (const command of commands) {
+    if (command.source !== "extension") continue;
+    const name = command.name.trim();
+    if (!name || name === "reload" || name.includes("/") || /\s/.test(name)) continue;
+    const key = name.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    extensionCommands.push({ name, source: "extension", description: command.description, path: slashCommandSourcePath(command) });
+  }
+  return [...WEB_SLASH_COMMANDS, ...extensionCommands];
+}
+
+function slashCommandSourcePath(command: PiSlashCommand): string | undefined {
+  const value = command.sourceInfo?.path;
+  return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
+function slashCommandNameFromText(value: string): string | undefined {
+  const text = value.trimEnd();
+  if (!text.startsWith("/")) return undefined;
+  const name = text.slice(1).split(/\s+/, 1)[0]?.trim();
+  return name || undefined;
 }
 
 function formatLoadedResources(resources: PiLoadedResources): string {

@@ -139,6 +139,8 @@ export async function registerSessionRoutes(app: FastifyInstance) {
 
   app.get("/api/sessions/:sessionId/models", async (req) => ({ models: await agentManager.availableModels((req.params as any).sessionId) }));
 
+  app.get("/api/sessions/:sessionId/commands", async (req) => ({ commands: await agentManager.commands((req.params as any).sessionId) }));
+
   app.patch("/api/sessions/:sessionId/model", async (req) => {
     const body = ModelBody.parse(req.body ?? {});
     return agentManager.setModel((req.params as any).sessionId, body.provider, body.modelId);

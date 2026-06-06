@@ -1,4 +1,4 @@
-import type { AgentSessionRecord, BoxRecord, PiModel, SessionStats, ThinkingLevel } from "../core/types.js";
+import type { AgentSessionRecord, BoxRecord, PiModel, PiSlashCommand, SessionStats, ThinkingLevel } from "../core/types.js";
 import { store } from "../core/store.js";
 import { AgentRuntime, type PromptPayload } from "./agent-runtime.js";
 import { wsHub } from "../ws/hub.js";
@@ -158,6 +158,11 @@ export class AgentManager {
   async availableModels(id: string): Promise<PiModel[]> {
     const runtime = await this.runtime(id);
     return runtime.availableModels();
+  }
+
+  async commands(id: string): Promise<PiSlashCommand[]> {
+    const runtime = await this.runtime(id);
+    return runtime.commands();
   }
 
   async stats(id: string): Promise<SessionStats | null> {

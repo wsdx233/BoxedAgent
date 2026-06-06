@@ -2,7 +2,7 @@ import { StringDecoder } from "node:string_decoder";
 import { PassThrough } from "node:stream";
 import type { Exec } from "dockerode";
 import fs from "fs-extra";
-import type { BoxRecord, AgentSessionRecord, AgentSessionStatus, PiModel, SessionStats, ThinkingLevel } from "../core/types.js";
+import type { BoxRecord, AgentSessionRecord, AgentSessionStatus, PiModel, PiSlashCommand, SessionStats, ThinkingLevel } from "../core/types.js";
 import { dockerService } from "../docker/docker-service.js";
 import { store } from "../core/store.js";
 import { wsHub } from "../ws/hub.js";
@@ -41,6 +41,7 @@ export class AgentRuntime {
   private stopped = false;
   private workRequested = false;
   private liveStatus?: AgentSessionStatus;
+  private extensionCommandIdleTimer?: NodeJS.Timeout;
 
   constructor(public record: AgentSessionRecord, private box: BoxRecord) {}
 
@@ -119,8 +120,11 @@ export class AgentRuntime {
     await this.start();
     await store.patchSession(this.record.id, { status: "working", lastActiveAt: new Date().toISOString() });
     this.publishStatus("working");
+    const extensionCommandPrompt = await this.isExtensionCommandPrompt(payload).catch(() => false);
     try {
-      return await this.send({ type: "prompt", ...payload });
+      const result = await this.send({ type: "prompt", ...payload });
+      if (extensionCommandPrompt) this.scheduleExtensionCommandIdleCheck();
+      return result;
     } catch (error) {
       this.workRequested = false;
       await store.patchSession(this.record.id, { status: "running", lastActiveAt: new Date().toISOString() }).catch(() => undefined);
@@ -189,6 +193,12 @@ export class AgentRuntime {
     return Array.isArray(data?.models) ? data.models : [];
   }
 
+  async commands(): Promise<PiSlashCommand[]> {
+    await this.start();
+    const data = await this.send({ type: "get_commands" }, 30_000) as any;
+    return normalizePiSlashCommands(data);
+  }
+
   async stats(): Promise<SessionStats> {
     await this.start();
     const stats = await this.send({ type: "get_session_stats" }, 30_000) as SessionStats;
@@ -247,6 +257,10 @@ export class AgentRuntime {
   async stop() {
     this.stopped = true;
     this.workRequested = false;
+    if (this.extensionCommandIdleTimer) {
+      clearTimeout(this.extensionCommandIdleTimer);
+      this.extensionCommandIdleTimer = undefined;
+    }
     for (const pending of this.pending.values()) {
       clearTimeout(pending.timer);
       pending.reject(new Error("agent stopped"));
@@ -398,6 +412,36 @@ export class AgentRuntime {
     setImmediate(() => wsHub.publishSession(this.record.id, { type: "agent_event", event: message }));
   }
 
+  private async isExtensionCommandPrompt(payload: PromptPayload): Promise<boolean> {
+    if (payload.images?.length) return false;
+    const commandName = slashCommandNameFromPrompt(payload.message);
+    if (!commandName) return false;
+    const commands = await this.commands();
+    return commands.some((command) => command.source === "extension" && command.name === commandName);
+  }
+
+  private scheduleExtensionCommandIdleCheck() {
+    if (this.extensionCommandIdleTimer) clearTimeout(this.extensionCommandIdleTimer);
+    this.extensionCommandIdleTimer = setTimeout(() => {
+      this.extensionCommandIdleTimer = undefined;
+      void this.refreshIdleStatusAfterExtensionCommand();
+    }, 300);
+  }
+
+  private async refreshIdleStatusAfterExtensionCommand() {
+    if (!this.stream || this.stopped) return;
+    try {
+      const state = await this.send({ type: "get_state" }, 5_000) as any;
+      const pendingCount = Number(state?.pendingMessageCount ?? 0);
+      if (state?.isStreaming || state?.isCompacting || pendingCount > 0) return;
+      this.workRequested = false;
+      await store.patchSession(this.record.id, { status: "running", lastActiveAt: new Date().toISOString() });
+      this.publishStatus("running");
+    } catch {
+      // Older pi builds or session replacement during an extension command may reject get_state.
+    }
+  }
+
   private handleExtensionUiRequest(message: any) {
     if (message.method === "notify") {
       wsHub.publishSession(this.record.id, { type: "extension_ui", request: message });
@@ -424,6 +468,10 @@ export class AgentRuntime {
     if (this.stopped) return;
     this.stopped = true;
     this.workRequested = false;
+    if (this.extensionCommandIdleTimer) {
+      clearTimeout(this.extensionCommandIdleTimer);
+      this.extensionCommandIdleTimer = undefined;
+    }
     for (const pending of this.pending.values()) {
       clearTimeout(pending.timer);
       pending.reject(new Error("agent process exited"));
@@ -442,6 +490,26 @@ export class AgentRuntime {
     wsHub.publishSession(this.record.id, { type: "session_status", status, error });
     wsHub.publishBox(this.box.id, { type: "sessions_changed" });
   }
+}
+
+function normalizePiSlashCommands(data: any): PiSlashCommand[] {
+  const commands = Array.isArray(data?.commands) ? data.commands : [];
+  return commands.flatMap((item: any): PiSlashCommand[] => {
+    if (!item || typeof item !== "object") return [];
+    const name = typeof item.name === "string" ? item.name.trim() : "";
+    const source = typeof item.source === "string" ? item.source : "";
+    if (!name || (source !== "extension" && source !== "prompt" && source !== "skill")) return [];
+    const description = typeof item.description === "string" && item.description.trim() ? item.description.trim() : undefined;
+    const sourceInfo = item.sourceInfo && typeof item.sourceInfo === "object" && !Array.isArray(item.sourceInfo) ? item.sourceInfo as Record<string, unknown> : undefined;
+    return [{ name, source, ...(description ? { description } : {}), ...(sourceInfo ? { sourceInfo } : {}) }];
+  });
+}
+
+function slashCommandNameFromPrompt(message: string): string | undefined {
+  const text = message.trimEnd();
+  if (!text.startsWith("/")) return undefined;
+  const name = text.slice(1).split(/\s+/, 1)[0]?.trim();
+  return name || undefined;
 }
 
 function sessionStatusForAgentEvent(message: any): AgentSessionStatus | undefined {

@@ -1,4 +1,4 @@
-import type { AgentSessionRecord, BoxPortMapping, BoxRecord, FileEntry, ImageProfileRecord, PiBoxConfig, PiExtensionRecord, PiExtensionScope, PiLoadedResources, PiModel, SessionStats, SessionTree, ThinkingLevel } from "./types";
+import type { AgentSessionRecord, BoxPortMapping, BoxRecord, FileEntry, ImageProfileRecord, PiBoxConfig, PiExtensionRecord, PiExtensionScope, PiLoadedResources, PiModel, PiSlashCommand, SessionStats, SessionTree, ThinkingLevel } from "./types";
 
 async function request<T>(url: string, init?: RequestInit): Promise<T> {
   const headers = new Headers(init?.headers);
@@ -82,6 +82,7 @@ export const api = {
   sessionStats: (id: string) => request<{ stats: SessionStats | null }>(`/api/sessions/${id}/stats`),
   sessionResources: (id: string) => request<{ resources: PiLoadedResources }>(`/api/sessions/${id}/resources`),
   sessionModels: (id: string) => request<{ models: PiModel[] }>(`/api/sessions/${id}/models`),
+  sessionCommands: (id: string) => request<{ commands: PiSlashCommand[] }>(`/api/sessions/${id}/commands`),
   setSessionModel: (id: string, body: { provider: string; modelId: string }) => request<{ session: AgentSessionRecord; model?: PiModel | null }>(`/api/sessions/${id}/model`, { method: "PATCH", body: JSON.stringify(body) }),
   setSessionThinking: (id: string, level: ThinkingLevel) => request<{ session: AgentSessionRecord; state?: any }>(`/api/sessions/${id}/thinking`, { method: "PATCH", body: JSON.stringify({ level }) }),
   setAutoCompaction: (id: string, enabled: boolean) => request<{ session: AgentSessionRecord; state?: any }>(`/api/sessions/${id}/auto-compaction`, { method: "PATCH", body: JSON.stringify({ enabled }) }),

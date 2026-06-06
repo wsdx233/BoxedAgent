@@ -168,6 +168,15 @@ export interface PiModel {
   [key: string]: unknown;
 }
 
+export type PiSlashCommandSource = "extension" | "prompt" | "skill";
+
+export interface PiSlashCommand {
+  name: string;
+  description?: string;
+  source: PiSlashCommandSource;
+  sourceInfo?: Record<string, unknown>;
+}
+
 export type PiResourceScope = "box" | "workspace" | "package" | "path";
 export type PiResourceKind = "context" | "package" | "extension" | "skill" | "prompt" | "theme";
 
