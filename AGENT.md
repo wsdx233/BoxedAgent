@@ -269,8 +269,8 @@ Chat uploads go to `/workspace/.upload`.
 When working on pi-specific features, consult installed pi docs/source as needed. Relevant local docs may include:
 
 ```text
-/home/wsdx233/.nvm/versions/node/v24.12.0/lib/node_modules/@mariozechner/pi-coding-agent/README.md
-/home/wsdx233/.nvm/versions/node/v24.12.0/lib/node_modules/@mariozechner/pi-coding-agent/docs
+/home/wsdx233/.nvm/versions/node/v24.12.0/lib/node_modules/@earendil-works/pi-coding-agent/README.md
+/home/wsdx233/.nvm/versions/node/v24.12.0/lib/node_modules/@earendil-works/pi-coding-agent/docs
 .cache/pi-mono/packages/coding-agent/src
 ```
 

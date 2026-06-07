@@ -138,11 +138,13 @@ export interface ImageProfileRecord {
 }
 
 export type AgentSessionStatus = "idle" | "starting" | "running" | "working" | "stopped" | "error";
+export type AgentSessionKind = "chat" | "tui";
 
 export interface AgentSessionRecord {
   id: string;
   boxId: string;
   name: string;
+  kind: AgentSessionKind;
   status: AgentSessionStatus;
   createdAt: string;
   updatedAt: string;
@@ -153,6 +155,8 @@ export interface AgentSessionRecord {
   thinkingLevel?: ThinkingLevel;
   autoCompactionEnabled?: boolean;
   sessionFile?: string;
+  piSessionId?: string;
+  launchArgs?: string[];
   error?: string;
   loadedResources?: PiLoadedResources;
 }

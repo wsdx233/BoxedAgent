@@ -1,6 +1,6 @@
 import { useEffect, useState, type FormEvent, type MouseEvent, type ReactNode } from "react";
 import { createPortal } from "react-dom";
-import { Boxes, Copy, Edit3, GitBranch, GitFork, ImagePlus, MoreVertical, Play, Plus, RefreshCw, Square, Trash2 } from "lucide-react";
+import { Boxes, Copy, Edit3, GitBranch, GitFork, ImagePlus, MoreVertical, Play, Plus, RefreshCw, Square, SquareTerminal, Trash2 } from "lucide-react";
 import { api } from "../lib/api";
 import { useAppStore } from "../state/app";
 import type { AgentSessionRecord, BoxRecord, SessionTreeNode } from "../lib/types";
@@ -57,9 +57,11 @@ export function Sidebar({ onNewBox, onOpenImageEditor, onSessionSelected }: { on
 
   const sessionMenuItems = menuSession ? [
     { label: "重命名", icon: <Edit3 size={14} />, onClick: () => setRenameTarget({ kind: "session", id: menuSession.id, name: menuSession.name }) },
-    { label: "Tree", icon: <GitBranch size={14} />, onClick: () => setTreeTarget(menuSession) },
-    { label: "Fork", icon: <GitFork size={14} />, onClick: () => setForkTarget(menuSession) },
-    { label: "Clone", icon: <Copy size={14} />, onClick: async () => { const res = await api.cloneSession(menuSession.id, { name: cloneSessionName(menuSession.name) }); if (!res.cancelled) { await refresh(); setActiveSession(res.session.id); onSessionSelected?.(); } } },
+    ...(menuSession.kind === "tui" ? [] : [
+      { label: "Tree", icon: <GitBranch size={14} />, onClick: () => setTreeTarget(menuSession) },
+      { label: "Fork", icon: <GitFork size={14} />, onClick: () => setForkTarget(menuSession) },
+      { label: "Clone", icon: <Copy size={14} />, onClick: async () => { const res = await api.cloneSession(menuSession.id, { name: cloneSessionName(menuSession.name) }); if (!res.cancelled) { await refresh(); setActiveSession(res.session.id); onSessionSelected?.(); } } }
+    ]),
     { label: "复刻空配置", icon: <Copy size={14} />, onClick: async () => { const res = await api.duplicateSession(menuSession.id, { name: duplicateSessionName(menuSession.name) }); await refresh(); setActiveSession(res.session.id); onSessionSelected?.(); } },
     menuSession.status === "running" || menuSession.status === "working"
       ? { label: "停止", icon: <Square size={14} />, onClick: async () => { await api.stopSession(menuSession.id); await refresh(); } }
@@ -110,11 +112,12 @@ function SessionItem({ session, active, onSelect, onContextMenu, onMenu }: { ses
     <div className="card-main-row">
       <strong>{session.name}</strong>
       <div className="card-meta-actions">
+        {session.kind === "tui" && <span className="mini-badge session-kind-badge"><SquareTerminal size={11} /> TUI</span>}
         <StatusIndicator status={session.status} />
         <button className="card-menu-button" title="操作" onClick={onMenu} onContextMenu={onMenu}><MoreVertical size={16} /></button>
       </div>
     </div>
-    <div className="small session-meta-line"><span>{session.model || "默认模型"}</span><span>·</span><span>{session.cwd || "/workspace"}</span></div>
+    <div className="small session-meta-line"><span>{session.kind === "tui" ? "pi TUI" : session.model || "默认模型"}</span><span>·</span><span>{session.cwd || "/workspace"}</span></div>
     {session.error && <div className="small" style={{ color: "var(--red)" }}>{session.error}</div>}
   </div>;
 }

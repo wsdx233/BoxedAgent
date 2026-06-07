@@ -9,7 +9,9 @@ import { wsHub } from "../ws/hub.js";
 import { conflict } from "../core/errors.js";
 import { hostPathForContainerWorkspacePath, materializeBoxPiConfig, piRuntimeEnv } from "./pi-config.js";
 import { attachMessageMeta, findSessionMessageById, truncateSessionMessages } from "./message-truncation.js";
+import { buildPiRuntimeArgs } from "./pi-args.js";
 import { collectPiLoadedResources } from "./pi-resources.js";
+import { ensureCompatiblePiCli } from "./pi-version.js";
 
 interface PendingRequest {
   resolve: (value: unknown) => void;
@@ -68,19 +70,13 @@ export class AgentRuntime {
       const startingBox = await store.patchBox(this.box.id, { status: "starting", error: undefined });
       await materializeBoxPiConfig(startingBox);
       const started = await dockerService.start(startingBox);
-      await store.patchBox(this.box.id, { containerId: started.containerId, status: "running", lastActiveAt: new Date().toISOString(), error: undefined });
+      this.box = await store.patchBox(this.box.id, { containerId: started.containerId, status: "running", lastActiveAt: new Date().toISOString(), error: undefined });
+      await ensureCompatiblePiCli(this.box).catch((error) => {
+        wsHub.publishSession(this.record.id, { type: "agent_warning", warning: `failed to auto-upgrade pi in Box: ${error instanceof Error ? error.message : String(error)}` });
+        throw error;
+      });
 
-      const args = ["pi", "--mode", "rpc"];
-      if (this.record.sessionFile) args.push("--session", this.record.sessionFile);
-      else args.push("--session-dir", "/workspace/.pi-sessions");
-      const provider = this.record.provider ?? this.box.pi.defaultProvider;
-      const model = this.record.model ?? this.box.pi.defaultModel;
-      const thinkingLevel = this.record.thinkingLevel ?? this.box.pi.defaultThinkingLevel;
-      if (provider) args.push("--provider", provider);
-      if (model) args.push("--model", model);
-      if (thinkingLevel) args.push("--thinking", thinkingLevel);
-      if (this.box.pi.extraArgs?.length) args.push(...this.box.pi.extraArgs);
-
+      const args = buildPiRuntimeArgs(this.record, this.box, { mode: "rpc" });
       const cwd = normalizeSessionCwd(this.record.cwd);
       await dockerService.assertDirectory(this.box, cwdToWorkspaceRel(cwd));
       this.exec = await dockerService.createInteractiveExec(this.box, args, { cwd, tty: false, env: piRuntimeEnv(this.box) });

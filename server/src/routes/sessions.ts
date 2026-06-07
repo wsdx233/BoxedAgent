@@ -4,6 +4,7 @@ import { store } from "../core/store.js";
 import { agentManager } from "../agent/agent-manager.js";
 import { dockerService } from "../docker/docker-service.js";
 import { attachMessageMeta } from "../agent/message-truncation.js";
+import { normalizeCustomPiArgs } from "../agent/pi-args.js";
 
 const CreateSession = z.object({
   boxId: z.string().min(1),
@@ -12,6 +13,9 @@ const CreateSession = z.object({
   provider: z.string().optional(),
   model: z.string().optional(),
   thinkingLevel: z.enum(["off", "minimal", "low", "medium", "high", "xhigh"]).optional(),
+  kind: z.enum(["chat", "tui"]).default("chat"),
+  launchArgs: z.array(z.string()).optional().default([]),
+  launchArgsText: z.string().optional().default(""),
   autostart: z.boolean().default(false)
 });
 
@@ -56,7 +60,8 @@ export async function registerSessionRoutes(app: FastifyInstance) {
     const body = CreateSession.parse(req.body);
     const box = store.getBox(body.boxId);
     await dockerService.assertDirectory(box, cwdToWorkspaceRel(body.cwd));
-    const session = await agentManager.createSession(body);
+    const launchArgs = body.launchArgsText.trim() ? normalizeCustomPiArgs(body.launchArgsText) : normalizeCustomPiArgs(body.launchArgs);
+    const session = await agentManager.createSession({ ...body, launchArgs });
     if (body.autostart) await agentManager.start(session.id);
     reply.code(201);
     return store.getSession(session.id);

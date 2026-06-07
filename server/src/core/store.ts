@@ -254,14 +254,17 @@ function normalizeMappingOpenPath(value?: string): string | undefined {
 }
 
 function normalizeSession(session: AgentSessionRecord): AgentSessionRecord {
+  const kind = session.kind === "tui" ? "tui" : "chat";
   const loadedResources = session.loadedResources && typeof session.loadedResources === "object"
     ? { ...session.loadedResources, cwd: normalizeSessionCwd(session.loadedResources.cwd) }
     : undefined;
   return {
     ...session,
+    kind,
     cwd: normalizeSessionCwd(session.cwd),
     autoCompactionEnabled: session.autoCompactionEnabled ?? true,
-    loadedResources
+    launchArgs: normalizeLaunchArgs(session.launchArgs),
+    loadedResources: kind === "chat" ? loadedResources : undefined
   };
 }
 
@@ -269,6 +272,10 @@ function normalizeSessionCwd(cwd?: string): string {
   const value = cwd?.trim() || "/workspace";
   if (value === "/workspace" || value.startsWith("/workspace/")) return value.replace(/\/+$/g, "") || "/workspace";
   return "/workspace";
+}
+
+function normalizeLaunchArgs(value?: string[]): string[] {
+  return (value ?? []).map((item) => item.trim()).filter(Boolean);
 }
 
 function normalizeImageProfile(profile: ImageProfileRecord): ImageProfileRecord {
@@ -405,6 +412,12 @@ function cloneImageProfile(profile: ImageProfileRecord): ImageProfileRecord {
 }
 
 function migrateBuiltInImageProfile(profile: ImageProfileRecord): ImageProfileRecord {
+  if (profile.id === "profile_default_ubuntu_dev" && profile.dockerfile.includes("@mariozechner/pi-coding-agent")) {
+    return normalizeImageProfile({
+      ...profile,
+      dockerfile: profile.dockerfile.replace(/npm install -g @mariozechner\/pi-coding-agent(?:@\S+)? --no-audit --no-fund/g, "npm install -g @earendil-works/pi-coding-agent@latest --ignore-scripts --no-audit --no-fund")
+    });
+  }
   if (profile.id !== "profile_cuda_torch") return profile;
   if (profile.dockerfile === cudaTorchDockerfileLegacy()) {
     return normalizeImageProfile({

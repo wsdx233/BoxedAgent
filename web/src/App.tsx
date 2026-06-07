@@ -1,6 +1,7 @@
 import { type CSSProperties, type FormEvent, type PointerEvent as ReactPointerEvent, useEffect, useState } from "react";
 import { ChatPane } from "./components/ChatPane";
 import { CreateBoxModal } from "./components/CreateBoxModal";
+import { TuiSessionPane } from "./components/TuiSessionPane";
 import { ImageProfileEditorModal } from "./components/ImageProfileEditorModal";
 import { RightPanel } from "./components/RightPanel";
 import { Sidebar } from "./components/Sidebar";
@@ -114,7 +115,7 @@ export function App() {
     <div className={appClass} style={appStyle}>
       <Sidebar onNewBox={() => setShowCreate(true)} onOpenImageEditor={() => setShowImageEditor(true)} onSessionSelected={() => setMobilePanel("chat")} />
       <div className="app-resizer left" role="separator" aria-label="调整 Boxes 宽度" onPointerDown={(event) => startResize("left", event)} />
-      <ChatPane boxId={activeBoxId} sessionId={activeSessionId} />
+      {activeSession?.kind === "tui" ? <TuiSessionPane session={activeSession} /> : <ChatPane boxId={activeBoxId} sessionId={activeSessionId} />}
       <div className="app-resizer right" role="separator" aria-label="调整 Tools 宽度" onPointerDown={(event) => startResize("right", event)} />
       <RightPanel box={activeBox} boxes={boxes} sessionId={activeSessionId} sessionCwd={activeSession?.cwd} onRefresh={refresh} />
     </div>

@@ -1,5 +1,7 @@
 FROM ubuntu:24.04
 
+LABEL boxedagent.default-box-revision="2026-06-07-pi-earendil-latest"
+
 ENV DEBIAN_FRONTEND=noninteractive \
     NVM_DIR=/opt/nvm \
     NODE_VERSION=22
@@ -21,7 +23,7 @@ RUN mkdir -p "$NVM_DIR" \
     && nvm use default \
     && npm config set fund false \
     && npm config set audit false \
-    && npm install -g @mariozechner/pi-coding-agent --no-audit --no-fund \
+    && npm install -g @earendil-works/pi-coding-agent@latest --force --ignore-scripts --no-audit --no-fund \
     && ln -sf "$NVM_DIR/versions/node/$(. "$NVM_DIR/nvm.sh" && nvm version)/bin/node" /usr/local/bin/node \
     && ln -sf "$NVM_DIR/versions/node/$(. "$NVM_DIR/nvm.sh" && nvm version)/bin/npm" /usr/local/bin/npm \
     && ln -sf "$NVM_DIR/versions/node/$(. "$NVM_DIR/nvm.sh" && nvm version)/bin/npx" /usr/local/bin/npx \

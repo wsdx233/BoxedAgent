@@ -10,6 +10,9 @@ import { badRequest, conflict, notFound } from "../core/errors.js";
 import { materializeBoxPiConfig, piRuntimeEnv } from "../agent/pi-config.js";
 import { wsHub } from "../ws/hub.js";
 
+const DEFAULT_BOX_REVISION_LABEL = "boxedagent.default-box-revision";
+const DEFAULT_BOX_REVISION = "2026-06-07-pi-earendil-latest";
+
 export interface FileEntry {
   name: string;
   path: string;
@@ -49,7 +52,7 @@ export class DockerService {
 
   async ensureImage(image: string): Promise<ImageStatus> {
     const existing = await this.imageStatus(image);
-    if (existing.available) return existing;
+    if (existing.available && (!this.isDefaultBoxImage(image) || await this.defaultBoxImageIsCurrent(image))) return existing;
 
     const pending = this.imageEnsures.get(image);
     if (pending) return pending;
@@ -484,6 +487,15 @@ shutil.move(src, dst)
     const stream = await this.docker.buildImage({ context, src: ["box.Dockerfile"] }, { t: image, dockerfile: "box.Dockerfile" });
     await this.followProgress(stream as unknown as NodeJS.ReadableStream);
     await this.assertImageAvailable(image, "Docker build finished but the tagged image was not created");
+  }
+
+  private async defaultBoxImageIsCurrent(image: string): Promise<boolean> {
+    try {
+      const info = await this.docker.getImage(image).inspect();
+      return info.Config?.Labels?.[DEFAULT_BOX_REVISION_LABEL] === DEFAULT_BOX_REVISION;
+    } catch {
+      return false;
+    }
   }
 
   private async pullImage(image: string): Promise<void> {

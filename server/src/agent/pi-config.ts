@@ -11,7 +11,8 @@ export function piRuntimeEnv(box: BoxRecord, options: { stdioGuard?: boolean } =
   const env = [
     `PI_CODING_AGENT_DIR=${PI_AGENT_DIR_IN_CONTAINER}`,
     "PI_SKIP_VERSION_CHECK=1",
-    "PI_TELEMETRY=0"
+    "PI_TELEMETRY=0",
+    "PATH=/usr/local/bin:/opt/nvm/versions/node/v22.22.2/bin:/opt/nvm/versions/node/v22/bin:/opt/nvm/current/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
   ];
   if (options.stdioGuard ?? true) env.push(`NODE_OPTIONS=${nodeOptionsWithRpcStdioGuard(box.env?.NODE_OPTIONS)}`);
   return env;

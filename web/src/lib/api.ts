@@ -61,7 +61,7 @@ export const api = {
   getCurrentSession: () => request<{ sessionId?: string; activeSessionId?: string; boxId?: string; session?: AgentSessionRecord }>("/api/current-session"),
   setCurrentSession: (sessionId?: string) => request<{ ok: boolean; sessionId?: string; activeSessionId?: string; boxId?: string; session?: AgentSessionRecord }>("/api/current-session", { method: sessionId ? "PUT" : "DELETE", body: sessionId ? JSON.stringify({ sessionId }) : undefined }),
   listSessions: (boxId?: string) => request<{ sessions: AgentSessionRecord[] }>(`/api/sessions${boxId ? `?boxId=${encodeURIComponent(boxId)}` : ""}`),
-  createSession: (body: { boxId: string; name?: string; cwd?: string; provider?: string; model?: string; thinkingLevel?: ThinkingLevel; autostart?: boolean }) => request<AgentSessionRecord>("/api/sessions", { method: "POST", body: JSON.stringify(body) }),
+  createSession: (body: { boxId: string; name?: string; cwd?: string; provider?: string; model?: string; thinkingLevel?: ThinkingLevel; kind?: AgentSessionRecord["kind"]; launchArgs?: string[]; launchArgsText?: string; autostart?: boolean }) => request<AgentSessionRecord>("/api/sessions", { method: "POST", body: JSON.stringify(body) }),
   startSession: (id: string) => request<AgentSessionRecord>(`/api/sessions/${id}/start`, { method: "POST" }),
   stopSession: (id: string) => request<AgentSessionRecord>(`/api/sessions/${id}/stop`, { method: "POST" }),
   reloadSession: (id: string) => request<{ session: AgentSessionRecord }>(`/api/sessions/${id}/reload`, { method: "POST" }),

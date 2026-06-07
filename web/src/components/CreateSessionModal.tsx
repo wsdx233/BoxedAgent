@@ -1,10 +1,11 @@
 import { FormEvent, useEffect, useMemo, useState } from "react";
 import { createPortal } from "react-dom";
-import { ArrowUp, Bot, CheckCircle2, CircleAlert, Folder, FolderOpen, FolderPlus, Loader2, Plus, RefreshCw } from "lucide-react";
+import { ArrowUp, Bot, CheckCircle2, CircleAlert, Folder, FolderOpen, FolderPlus, Loader2, Plus, RefreshCw, SquareTerminal, Sparkles } from "lucide-react";
 import { api } from "../lib/api";
-import type { BoxRecord, FileEntry, PiModel } from "../lib/types";
+import type { AgentSessionKind, BoxRecord, FileEntry, PiModel } from "../lib/types";
 
 export function CreateSessionModal({ box, onClose, onCreated }: { box: BoxRecord; onClose: () => void; onCreated: (sessionId: string) => void }) {
+  const [kind, setKind] = useState<AgentSessionKind>("chat");
   const [name, setName] = useState(`Session ${new Date().toLocaleString()}`);
   const [cwd, setCwd] = useState("/workspace");
   const [browsePath, setBrowsePath] = useState(".");
@@ -18,6 +19,7 @@ export function CreateSessionModal({ box, onClose, onCreated }: { box: BoxRecord
   const [loadingModels, setLoadingModels] = useState(false);
   const [modelSearch, setModelSearch] = useState("");
   const [selectedModel, setSelectedModel] = useState<{ provider?: string; modelId?: string }>({ provider: box.pi.defaultProvider, modelId: box.pi.defaultModel });
+  const [customArgs, setCustomArgs] = useState("");
   const [creating, setCreating] = useState(false);
   const displayPath = browsePath === "." ? "/workspace" : `/workspace/${browsePath}`;
   const dirs = useMemo(() => entries.filter((entry) => entry.type === "directory"), [entries]);
@@ -107,7 +109,7 @@ export function CreateSessionModal({ box, onClose, onCreated }: { box: BoxRecord
     setError(undefined);
     try {
       await api.listFiles(box.id, cwdToBrowsePath(normalizedCwd));
-      const session = await api.createSession({ boxId: box.id, name: name.trim() || undefined, cwd: normalizedCwd, provider: selectedModel.provider, model: selectedModel.modelId, autostart: true });
+      const session = await api.createSession({ boxId: box.id, name: name.trim() || undefined, cwd: normalizedCwd, provider: selectedModel.provider, model: selectedModel.modelId, kind, launchArgsText: customArgs, autostart: true });
       onCreated(session.id);
       onClose();
     } catch (err) {
@@ -120,8 +122,12 @@ export function CreateSessionModal({ box, onClose, onCreated }: { box: BoxRecord
   return createPortal(<div className="modal-backdrop" onMouseDown={onClose}>
     <div className="modal session-modal" onMouseDown={(e) => e.stopPropagation()}>
       <h2>新建 Session</h2>
-      <p className="small">为 <strong>{box.name}</strong> 创建一个 pi session。工作目录会作为 agent 进程 cwd，工具调用默认也会从这里开始。</p>
+      <p className="small">为 <strong>{box.name}</strong> 创建一个 pi session。TUI Session 会以真实 pi 终端界面运行，关闭网页只会 detach。</p>
       <form className="form" onSubmit={submit}>
+        <div className="session-kind-tabs">
+          <button type="button" className={kind === "chat" ? "active" : ""} onClick={() => { setKind("chat"); if (name.startsWith("TUI Session")) setName(`Session ${new Date().toLocaleString()}`); }}><Sparkles size={15} /> Chat Session</button>
+          <button type="button" className={kind === "tui" ? "active" : ""} onClick={() => { setKind("tui"); if (name.startsWith("Session ")) setName(`TUI Session ${new Date().toLocaleString()}`); }}><SquareTerminal size={15} /> TUI Session</button>
+        </div>
         <label>Session 名称<input value={name} onChange={(e) => setName(e.target.value)} /></label>
         <label>工作目录<input value={cwd} onChange={(e) => setCwdAndBrowse(e.target.value)} onBlur={(e) => setCwdAndBrowse(normalizeCwd(e.target.value))} placeholder="/workspace 或 /workspace/subdir" /></label>
         <div className="dir-picker">
@@ -170,6 +176,18 @@ export function CreateSessionModal({ box, onClose, onCreated }: { box: BoxRecord
             {!loadingModels && models.length === 0 && <div className="empty-menu">未加载到模型；仍可使用 Box 默认模型。</div>}
           </div>
         </div>
+        <div className="session-args-card">
+          <div className="section-title"><SquareTerminal size={15} /> 自定义 pi 参数</div>
+          <p className="small">支持如 <code>-ne -ns -nt</code>、<code>--extension ./ext.ts</code>、<code>-e npm:pkg</code>。BoxedAgent 会自动管理 <code>--mode</code>、<code>--session-dir</code>、模型和工作目录。</p>
+          <div className="session-arg-presets">
+            <button type="button" onClick={() => setCustomArgs((value) => appendArg(value, "-ne"))}>-ne</button>
+            <button type="button" onClick={() => setCustomArgs((value) => appendArg(value, "-ns"))}>-ns</button>
+            <button type="button" onClick={() => setCustomArgs((value) => appendArg(value, "-nt"))}>-nt</button>
+            <button type="button" onClick={() => setCustomArgs((value) => appendArg(value, "--no-context-files"))}>--no-context-files</button>
+            <button type="button" onClick={() => setCustomArgs((value) => appendArg(value, "--extension "))}>--extension</button>
+          </div>
+          <textarea value={customArgs} onChange={(event) => setCustomArgs(event.target.value)} placeholder="-ne -ns -nt --extension ./my-extension.ts" />
+        </div>
         {error && <div className="notice error"><CircleAlert size={15} /> <span>{error}</span></div>}
         <div className="row space">
           <button type="button" onClick={onClose}>取消</button>
@@ -202,6 +220,11 @@ function browsePathToCwd(value: string) {
 function modelProvider(model: PiModel | null | undefined): string | undefined {
   const provider = model?.provider ?? model?.providerId ?? model?.providerName;
   return typeof provider === "string" && provider.trim() ? provider.trim() : undefined;
+}
+
+function appendArg(value: string, arg: string) {
+  const trimmed = value.trimEnd();
+  return trimmed ? `${trimmed} ${arg}` : arg;
 }
 
 function formatTokens(value: number) {

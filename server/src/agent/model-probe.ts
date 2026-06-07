@@ -5,13 +5,16 @@ import type { BoxRecord, PiModel } from "../core/types.js";
 import { dockerService } from "../docker/docker-service.js";
 import { store } from "../core/store.js";
 import { piRuntimeEnv } from "./pi-config.js";
+import { PI_BIN_IN_CONTAINER } from "./pi-args.js";
+import { ensureCompatiblePiCli } from "./pi-version.js";
 
 export async function listAvailableModelsForBox(box: BoxRecord): Promise<PiModel[]> {
   const starting = await store.patchBox(box.id, { status: "starting", error: undefined });
   const started = await dockerService.start(starting);
-  await store.patchBox(box.id, { containerId: started.containerId, status: "running", lastActiveAt: new Date().toISOString(), error: undefined });
+  const runningBox = await store.patchBox(box.id, { containerId: started.containerId, status: "running", lastActiveAt: new Date().toISOString(), error: undefined });
+  await ensureCompatiblePiCli(runningBox);
 
-  const args = ["pi", "--mode", "rpc", "--session-dir", `/tmp/boxedagent-model-probe-${randomUUID()}`];
+  const args = [PI_BIN_IN_CONTAINER, "--mode", "rpc", "--session-dir", `/tmp/boxedagent-model-probe-${randomUUID()}`];
   const exec = await dockerService.createInteractiveExec(box, args, { cwd: "/workspace", tty: false, env: piRuntimeEnv(box) });
   const stream = await exec.start({ hijack: true, stdin: true }) as NodeJS.ReadWriteStream;
   const stdout = new PassThrough();

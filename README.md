@@ -6,7 +6,7 @@ BoxedAgent 是一个基于 Docker 的 agent + sandbox 平台：每个 **Box** �
 
 - Box 管理：创建、启动、停止、克隆、修改、删除 Docker 容器/镜像。
 - 镜像保障：默认镜像 `boxedagent/ubuntu-dev:24.04` 不存在时，后端会自动用 `docker/box.Dockerfile` 构建；非默认镜像会尝试 `docker pull`。
-- 默认 Box 镜像：Ubuntu 24.04 + curl/wget/git/python3/ripgrep/fd/nvm/node/pi/code-server 等开发工具。
+- 默认 Box 镜像：Ubuntu 24.04 + curl/wget/git/python3/ripgrep/fd/nvm/node/code-server，并安装最新版 `@earendil-works/pi-coding-agent`。
 - Agent：容器内通过 `pi --mode rpc` 运行；支持多 Session、流式事件、文本与图片输入、中止、steer/follow-up 队列消息。
 - Session 持久化：pi session 文件保存在 Box workspace 的 `/workspace/.pi-sessions`，重启后会继续使用已有 session file。
 - 每 Box 独立 pi 配置：独立 `PI_CODING_AGENT_DIR=/workspace/.boxedagent/pi-agent`，支持 `settings.json`、`models.json`、`SYSTEM.md`、`APPEND_SYSTEM.md`、`AGENTS.md`、默认 provider/model/thinking、enabledModels 与环境变量。
@@ -41,7 +41,7 @@ npm run dev:web  # Web: http://localhost:5173
 > npm run docker:build-box
 > ```
 
-如果你之前运行过旧版本，建议重启服务并清理失败的测试 Box；旧版因缺少默认镜像产生的 `error` Box 现在可以直接点启动触发自动构建，也可以删除后重新创建。
+如果你之前运行过旧版本，建议重启服务并重新构建默认镜像：`npm run docker:build-box`。已有使用旧 `@mariozechner/pi-coding-agent` 的默认 Box 在启动 session 前会尝试自动升级到最新版 `@earendil-works/pi-coding-agent` 并修复 `/usr/local/bin/pi` 链接；失败时可进入 Shell 手动执行 `npm uninstall -g @mariozechner/pi-coding-agent || true && rm -f "$(dirname "$(command -v node)")/pi" /usr/local/bin/pi && npm install -g @earendil-works/pi-coding-agent@latest --force --ignore-scripts --no-audit --no-fund && ln -sf "$(dirname "$(command -v node)")/pi" /usr/local/bin/pi`。
 
 ## Docker Compose 部署
 

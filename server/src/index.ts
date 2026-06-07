@@ -16,6 +16,7 @@ import { registerPiExtensionRoutes } from "./routes/pi-extensions.js";
 import { registerImageProfileRoutes } from "./routes/image-profiles.js";
 import { registerEventWs } from "./ws/events.js";
 import { registerTerminalWs } from "./ws/terminal.js";
+import { registerTuiWs } from "./ws/tui.js";
 import { registerCodeServerProxy } from "./routes/codeserver.js";
 import { registerPortProxyRoutes } from "./routes/ports.js";
 import { agentManager } from "./agent/agent-manager.js";
@@ -50,6 +51,7 @@ export async function buildServer() {
 
   await registerEventWs(app);
   await registerTerminalWs(app);
+  await registerTuiWs(app);
   await registerImageProfileRoutes(app);
   await registerBoxRoutes(app);
   await registerSessionRoutes(app);

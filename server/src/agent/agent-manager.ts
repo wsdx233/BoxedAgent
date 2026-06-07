@@ -1,6 +1,8 @@
-import type { AgentSessionRecord, BoxRecord, PiModel, PiSlashCommand, SessionStats, ThinkingLevel } from "../core/types.js";
+import type { AgentSessionKind, AgentSessionRecord, BoxRecord, PiModel, PiSlashCommand, SessionStats, ThinkingLevel } from "../core/types.js";
 import { store } from "../core/store.js";
 import { AgentRuntime, type PromptPayload } from "./agent-runtime.js";
+import { TuiRuntime } from "./tui-runtime.js";
+import { createPiSessionId, isThinkingLevel, normalizeCustomPiArgs } from "./pi-args.js";
 import { wsHub } from "../ws/hub.js";
 import { readPiSessionMessage, readPiSessionMessages } from "./session-reader.js";
 import { findVisibleEntryIdForActiveMessageIndex, forkPiSessionFromEntry, getPiSessionTree, navigatePiSessionTree } from "./session-tree.js";
@@ -9,19 +11,24 @@ import { getPiLoadedResourcesForSession } from "./pi-resources.js";
 
 export class AgentManager {
   private runtimes = new Map<string, AgentRuntime>();
+  private tuiRuntimes = new Map<string, TuiRuntime>();
 
-  async createSession(input: { boxId: string; name?: string; provider?: string; model?: string; thinkingLevel?: ThinkingLevel; cwd?: string }): Promise<AgentSessionRecord> {
+  async createSession(input: { boxId: string; name?: string; provider?: string; model?: string; thinkingLevel?: ThinkingLevel; cwd?: string; kind?: AgentSessionKind; launchArgs?: string[] }): Promise<AgentSessionRecord> {
     const box = store.getBox(input.boxId);
     const now = new Date().toISOString();
+    const kind: AgentSessionKind = input.kind === "tui" ? "tui" : "chat";
     const session: AgentSessionRecord = {
       id: store.newSessionId(),
       boxId: box.id,
-      name: input.name || `Session ${new Date().toLocaleString()}`,
+      name: input.name || `${kind === "tui" ? "TUI Session" : "Session"} ${new Date().toLocaleString()}`,
+      kind,
       status: "idle",
       cwd: normalizeSessionCwd(input.cwd),
       provider: input.provider || box.pi.defaultProvider,
       model: input.model || box.pi.defaultModel,
       thinkingLevel: input.thinkingLevel || box.pi.defaultThinkingLevel,
+      piSessionId: kind === "tui" ? createPiSessionId() : undefined,
+      launchArgs: normalizeCustomPiArgs(input.launchArgs),
       createdAt: now,
       updatedAt: now
     };
@@ -32,6 +39,11 @@ export class AgentManager {
 
   async start(id: string, options: { resourceReason?: "startup" | "reload" } = {}): Promise<AgentSessionRecord> {
     const session = store.getSession(id);
+    if (session.kind === "tui") {
+      const runtime = await this.tuiRuntime(session.id);
+      await runtime.start();
+      return store.getSession(id);
+    }
     const runtime = await this.runtime(session.id);
     await runtime.start(options.resourceReason ?? "startup");
     return store.getSession(id);
@@ -51,6 +63,16 @@ export class AgentManager {
   async reload(id: string): Promise<AgentSessionRecord> {
     const session = store.getSession(id);
     if (session.status === "working") throw conflict("Cannot reload session while agent is working");
+    if (session.kind === "tui") {
+      const tuiRuntime = this.tuiRuntimes.get(id);
+      if (tuiRuntime) {
+        await tuiRuntime.stop();
+        this.tuiRuntimes.delete(id);
+      }
+      const reloaded = await this.start(id);
+      wsHub.publishBox(session.boxId, { type: "sessions_changed" });
+      return reloaded;
+    }
     const runtime = this.runtimes.get(id);
     if (runtime) {
       await runtime.stop();
@@ -64,16 +86,20 @@ export class AgentManager {
   async duplicateSession(id: string, input: { name?: string; autostart?: boolean } = {}): Promise<AgentSessionRecord> {
     const source = store.getSession(id);
     const now = new Date().toISOString();
+    const kind = source.kind === "tui" ? "tui" : "chat";
     const session: AgentSessionRecord = {
       id: store.newSessionId(),
       boxId: source.boxId,
       name: input.name?.trim() || `${source.name} 复刻`,
+      kind,
       status: "idle",
       cwd: normalizeSessionCwd(source.cwd),
       provider: source.provider,
       model: source.model,
       thinkingLevel: source.thinkingLevel,
       autoCompactionEnabled: source.autoCompactionEnabled,
+      piSessionId: kind === "tui" ? createPiSessionId() : undefined,
+      launchArgs: [...(source.launchArgs ?? [])],
       createdAt: now,
       updatedAt: now
     };
@@ -140,6 +166,17 @@ export class AgentManager {
   }
 
   async stop(id: string) {
+    const session = store.getSession(id);
+    if (session.kind === "tui") {
+      const tuiRuntime = this.tuiRuntimes.get(id);
+      if (tuiRuntime) {
+        await tuiRuntime.stop();
+        this.tuiRuntimes.delete(id);
+      } else {
+        await store.patchSession(id, { status: "stopped" });
+      }
+      return;
+    }
     const runtime = this.runtimes.get(id);
     if (runtime) {
       await runtime.stop();
@@ -150,8 +187,10 @@ export class AgentManager {
   }
 
   async state(id: string) {
+    const session = store.getSession(id);
+    if (session.kind === "tui") return { ...session, isStreaming: false, pendingMessageCount: 0 };
     const runtime = this.runtimes.get(id);
-    if (!runtime?.isActive()) return { ...store.getSession(id), isStreaming: false, pendingMessageCount: 0 };
+    if (!runtime?.isActive()) return { ...session, isStreaming: false, pendingMessageCount: 0 };
     return runtime.state();
   }
 
@@ -242,9 +281,37 @@ export class AgentManager {
     wsHub.publishBox(session.boxId, { type: "sessions_changed" });
   }
 
+  async attachTui(id: string, options: { cols?: number; rows?: number } = {}) {
+    const runtime = await this.tuiRuntime(id);
+    return runtime.attach(options);
+  }
+
+  writeTui(id: string, data: string): void {
+    const runtime = this.tuiRuntimes.get(id);
+    if (!runtime?.isActive()) throw conflict("TUI runtime is not running");
+    runtime.write(data);
+  }
+
+  async resizeTui(id: string, cols: number, rows: number): Promise<void> {
+    const runtime = this.tuiRuntimes.get(id);
+    if (!runtime?.isActive()) return;
+    await runtime.resize(cols, rows);
+  }
+
+  onTuiData(id: string, listener: (chunk: Buffer) => void): () => void {
+    const runtime = this.tuiRuntimes.get(id);
+    if (!runtime) return () => undefined;
+    runtime.on("data", listener);
+    return () => runtime.off("data", listener);
+  }
+
   async stopAll() {
-    await Promise.all([...this.runtimes.values()].map((r) => r.stop().catch(() => undefined)));
+    await Promise.all([
+      ...[...this.runtimes.values()].map((r) => r.stop().catch(() => undefined)),
+      ...[...this.tuiRuntimes.values()].map((r) => r.stop().catch(() => undefined))
+    ]);
     this.runtimes.clear();
+    this.tuiRuntimes.clear();
   }
 
   private async createReboundSessionAfterRuntimeSwitch(source: AgentSessionRecord, box: BoxRecord, runtime: AgentRuntime, state: Record<string, unknown>, name: string): Promise<AgentSessionRecord> {
@@ -264,6 +331,7 @@ export class AgentManager {
       id: store.newSessionId(),
       boxId: source.boxId,
       name,
+      kind: "chat",
       status: "running",
       cwd: normalizeSessionCwd(source.cwd),
       provider: modelProvider(model) ?? source.provider,
@@ -290,6 +358,7 @@ export class AgentManager {
       id: store.newSessionId(),
       boxId: source.boxId,
       name,
+      kind: "chat",
       status: "idle",
       cwd: normalizeSessionCwd(source.cwd),
       provider: source.provider,
@@ -310,9 +379,21 @@ export class AgentManager {
     const existing = this.runtimes.get(id);
     if (existing) return existing;
     const session = store.getSession(id);
+    if (session.kind === "tui") throw conflict("TUI sessions do not expose the chat RPC API");
     const box = store.getBox(session.boxId);
     const runtime = new AgentRuntime(session, box);
     this.runtimes.set(id, runtime);
+    return runtime;
+  }
+
+  private async tuiRuntime(id: string): Promise<TuiRuntime> {
+    const existing = this.tuiRuntimes.get(id);
+    if (existing) return existing;
+    const session = store.getSession(id);
+    if (session.kind !== "tui") throw conflict("session is not a TUI session");
+    const box = store.getBox(session.boxId);
+    const runtime = new TuiRuntime(session, box);
+    this.tuiRuntimes.set(id, runtime);
     return runtime;
   }
 }
@@ -321,10 +402,6 @@ function normalizeSessionCwd(cwd?: string): string {
   const value = cwd?.trim() || "/workspace";
   if (value === "/workspace" || value.startsWith("/workspace/")) return value.replace(/\/+$/, "") || "/workspace";
   return "/workspace";
-}
-
-function isThinkingLevel(value: unknown): value is ThinkingLevel {
-  return value === "off" || value === "minimal" || value === "low" || value === "medium" || value === "high" || value === "xhigh";
 }
 
 function modelProvider(model: PiModel | null | undefined): string | undefined {
