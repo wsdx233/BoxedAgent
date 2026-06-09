@@ -889,16 +889,18 @@ export function ChatPane({ boxId, sessionId }: { boxId?: string; sessionId?: str
     }
   }
 
-  function appendRuntimeNotice(targetSessionId: string, title: string, detail?: unknown, options?: { dedupe?: boolean }) {
+  function appendRuntimeNotice(targetSessionId: string, title: string, detail?: unknown, options?: { dedupe?: boolean; noticeId?: string }) {
     const body = runtimeNoticeText(title, detail);
-    const key = `${targetSessionId}:${body}`;
+    const key = options?.noticeId ? `${targetSessionId}:notice:${options.noticeId}` : `${targetSessionId}:${body}`;
     if (options?.dedupe !== false) {
       const seen = runtimeNoticeKeysRef.current;
       if (seen.has(key)) return;
+      const current = useAppStore.getState().messagesBySession[targetSessionId] ?? [];
+      if (options?.noticeId ? current.some((message) => message.noticeId === options.noticeId) : current.some((message) => message.role === "system" && message.text === body)) return;
       if (seen.size > 400) seen.clear();
       seen.add(key);
     }
-    appendMessage(targetSessionId, { id: newId(), role: "system", text: body, timestamp: Date.now() });
+    appendMessage(targetSessionId, { id: newId(), role: "system", text: body, timestamp: Date.now(), noticeId: options?.noticeId });
   }
 
   function appendLoadedResourcesNotice(targetSessionId: string, resources: PiLoadedResources) {
@@ -919,7 +921,7 @@ export function ChatPane({ boxId, sessionId }: { boxId?: string; sessionId?: str
       setText(request.text);
       return;
     }
-    if (request.method === "notify") appendRuntimeNotice(targetSessionId, `extension ${request.notifyType ?? "info"}`, request.message);
+    if (request.method === "notify") appendRuntimeNotice(targetSessionId, `extension ${request.notifyType ?? "info"}`, request.message, { noticeId: typeof request.noticeId === "string" ? request.noticeId : undefined });
   }
 
   function patchSessionLocal(patch: Partial<AgentSessionRecord>) {
@@ -2254,7 +2256,7 @@ async function normalizePiMessagesAsync(messages: any[], isCancelled: () => bool
     const m = messages[idx];
     const transport = transportMeta(m);
     const timestamp = m.timestamp ?? Date.now();
-    const sourceIndex = idx;
+    const sourceIndex = typeof m.__boxedagentSourceIndex === "number" && Number.isFinite(m.__boxedagentSourceIndex) ? m.__boxedagentSourceIndex : idx;
     if (m.role === "user") {
       const imageAttachments = attachmentsFromContent(m.content);
       const expanded = extractInlineFileBlocks(contentToText(m.content) || m.message || "");
@@ -2273,6 +2275,13 @@ async function normalizePiMessagesAsync(messages: any[], isCancelled: () => bool
         out.push(toolMessage);
         if (tool.toolCallId) toolCalls.set(String(tool.toolCallId), { tool, outIndex: out.length - 1 });
       });
+      continue;
+    }
+    if (m.role === "system") {
+      const noticeTitle = typeof m.__boxedagentNotice?.title === "string" ? m.__boxedagentNotice.title : "system";
+      const noticeId = typeof m.__boxedagentNotice?.id === "string" ? m.__boxedagentNotice.id : undefined;
+      const text = contentToText(m.content) || m.message || m.text || "";
+      out.push({ id: `${idx}-${timestamp}-system`, role: "system", text: m.__boxedagentNotice ? runtimeNoticeText(noticeTitle, text) : String(text), timestamp, transport, noticeId });
       continue;
     }
     const callId = String(m.tool_call_id ?? m.toolCallId ?? m.id ?? `${idx}-${timestamp}`);

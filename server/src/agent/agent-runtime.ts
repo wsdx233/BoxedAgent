@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { StringDecoder } from "node:string_decoder";
 import { PassThrough } from "node:stream";
 import type { Exec } from "dockerode";
@@ -9,6 +10,7 @@ import { wsHub } from "../ws/hub.js";
 import { conflict } from "../core/errors.js";
 import { hostPathForContainerWorkspacePath, materializeBoxPiConfig, piRuntimeEnv } from "./pi-config.js";
 import { attachMessageMeta, findSessionMessageById, truncateSessionMessages } from "./message-truncation.js";
+import { mergeSessionNotices } from "./session-reader.js";
 import { buildPiRuntimeArgs } from "./pi-args.js";
 import { collectPiLoadedResources } from "./pi-resources.js";
 import { ensureCompatiblePiCli } from "./pi-version.js";
@@ -150,15 +152,19 @@ export class AgentRuntime {
 
   async messages(options: { expandedMessageIds?: Iterable<string> } = {}): Promise<unknown[]> {
     await this.start();
+    this.syncRecordFromStore();
     const data = await this.send({ type: "get_messages" }) as any;
+    this.syncRecordFromStore();
     const messages = Array.isArray(data?.messages) ? data.messages : [];
-    return truncateSessionMessages(messages, options);
+    return truncateSessionMessages(mergeSessionNotices(messages, this.record.notices), options);
   }
 
   async message(messageId: string): Promise<unknown | undefined> {
     await this.start();
+    this.syncRecordFromStore();
     const data = await this.send({ type: "get_messages" }) as any;
-    const messages = Array.isArray(data?.messages) ? data.messages : [];
+    this.syncRecordFromStore();
+    const messages = mergeSessionNotices(Array.isArray(data?.messages) ? data.messages : [], this.record.notices);
     const message = findSessionMessageById(messages, messageId);
     return message === undefined ? undefined : attachMessageMeta(message, messageId);
   }
@@ -440,15 +446,38 @@ export class AgentRuntime {
 
   private handleExtensionUiRequest(message: any) {
     if (message.method === "notify") {
-      wsHub.publishSession(this.record.id, { type: "extension_ui", request: message });
-      const text = typeof message.message === "string" ? message.message : "";
-      if (text) wsHub.publishSession(this.record.id, { type: "agent_event", event: { type: "extension_notify", notifyType: message.notifyType ?? "info", message: text } });
+      void this.persistAndPublishExtensionNotify(message);
       return;
     }
     wsHub.publishSession(this.record.id, { type: "extension_ui", request: message });
     if (message.method === "setStatus" || message.method === "setWidget" || message.method === "setTitle" || message.method === "set_editor_text") return;
     const response = { type: "extension_ui_response", id: message.id, cancelled: true };
     this.stream?.write(`${JSON.stringify(response)}\n`, "utf8");
+  }
+
+  private async persistAndPublishExtensionNotify(message: any) {
+    const text = typeof message.message === "string" ? message.message : "";
+    const notifyType = typeof message.notifyType === "string" && message.notifyType.trim() ? message.notifyType.trim() : "info";
+    const timestamp = new Date().toISOString();
+    const noticeId = text.trim() ? randomUUID() : undefined;
+    let request = { ...message, notifyType, timestamp, noticeId };
+    if (text.trim() && noticeId) {
+      try {
+        this.record = await store.appendSessionNotice(this.record.id, {
+          id: noticeId,
+          kind: "extension_notify",
+          title: `extension ${notifyType}`,
+          message: text,
+          notifyType,
+          timestamp
+        });
+        wsHub.publishBox(this.box.id, { type: "sessions_changed" });
+      } catch (error) {
+        request = { ...request, persistError: error instanceof Error ? error.message : String(error) };
+      }
+      wsHub.publishSession(this.record.id, { type: "agent_event", event: { type: "extension_notify", notifyType, message: text, timestamp, noticeId } });
+    }
+    wsHub.publishSession(this.record.id, { type: "extension_ui", request });
   }
 
   private fail(error: unknown) {

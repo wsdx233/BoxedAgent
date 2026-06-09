@@ -256,7 +256,7 @@ export class AgentManager {
     }
     try {
       const box = store.getBox(session.boxId);
-      return readPiSessionMessages(box, session.sessionFile, options);
+      return readPiSessionMessages(box, session.sessionFile, { ...options, notices: session.notices });
     } catch (error) {
       if ((error as any)?.code === "NOT_FOUND") {
         await store.patchSession(id, { status: "error", error: "The Box for this session no longer exists" }).catch(() => undefined);
@@ -271,7 +271,7 @@ export class AgentManager {
     if (runtime?.isActive()) return runtime.message(messageId);
     const session = store.getSession(id);
     const box = store.getBox(session.boxId);
-    return readPiSessionMessage(box, session.sessionFile, messageId);
+    return readPiSessionMessage(box, session.sessionFile, messageId, session.notices);
   }
 
   async delete(id: string) {

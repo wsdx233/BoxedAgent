@@ -29,11 +29,12 @@ const BOXED_META_KEY = "__boxedagent";
 
 export function sessionMessageId(message: unknown, index: number): string {
   const record = isRecord(message) ? message : {};
+  const sourceIndex = typeof record.__boxedagentSourceIndex === "number" && Number.isFinite(record.__boxedagentSourceIndex) ? record.__boxedagentSourceIndex : index;
   const explicit = firstString(record.id, record.messageId, record.message_id, record.tool_call_id, record.toolCallId);
   const timestamp = firstString(record.timestamp, record.createdAt, record.created_at);
   const role = firstString(record.role, isRecord(record.message) ? record.message.role : undefined);
   const type = firstString(record.type, isRecord(record.message) ? record.message.type : undefined);
-  return `msg_${index}_${shortHash([String(index), explicit, timestamp, role, type].filter(Boolean).join("|"))}`;
+  return `msg_${sourceIndex}_${shortHash([String(sourceIndex), explicit, timestamp, role, type].filter(Boolean).join("|"))}`;
 }
 
 export function truncateSessionMessages(messages: unknown[], options: MessageTruncationOptions = {}): unknown[] {
@@ -97,6 +98,10 @@ function truncateValue(value: unknown, path: string, paths: MessageTruncationPat
   const next: Record<string, unknown> = {};
   for (const [key, item] of Object.entries(record)) {
     if (key === BOXED_META_KEY) continue;
+    if (key === "__boxedagentSourceIndex") {
+      next[key] = item;
+      continue;
+    }
     const out = truncateValue(item, `${path}.${escapePathKey(key)}`, paths, options, seen);
     changed ||= out.changed;
     next[key] = out.value;

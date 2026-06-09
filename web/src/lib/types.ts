@@ -139,6 +139,16 @@ export interface ImageProfileRecord {
 
 export type AgentSessionStatus = "idle" | "starting" | "running" | "working" | "stopped" | "error";
 export type AgentSessionKind = "chat" | "tui";
+export type AgentSessionNoticeKind = "extension_notify";
+
+export interface AgentSessionNotice {
+  id: string;
+  kind: AgentSessionNoticeKind;
+  title: string;
+  message: string;
+  notifyType?: string;
+  timestamp: string;
+}
 
 export interface AgentSessionRecord {
   id: string;
@@ -159,6 +169,7 @@ export interface AgentSessionRecord {
   launchArgs?: string[];
   error?: string;
   loadedResources?: PiLoadedResources;
+  notices?: AgentSessionNotice[];
 }
 
 export interface PiModel {
@@ -310,4 +321,5 @@ export interface ChatMessage {
   toolResultMeta?: ToolResultMeta;
   toolStatus?: ChatToolStatus;
   transport?: ChatMessageTransportMeta;
+  noticeId?: string;
 }

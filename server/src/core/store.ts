@@ -2,10 +2,11 @@ import fs from "fs-extra";
 import { randomUUID } from "node:crypto";
 import path from "node:path";
 import { env, paths } from "../config/env.js";
-import type { AgentSessionRecord, BoxPortMapping, BoxRecord, ContainerBindMount, ContainerDeviceMapping, ContainerGpuConfig, ContainerStartupConfig, ImageBuildConfig, ImageBuildContextFile, ImageProfileRecord, PersistedState, PiBoxConfig } from "./types.js";
+import type { AgentSessionNotice, AgentSessionRecord, BoxPortMapping, BoxRecord, ContainerBindMount, ContainerDeviceMapping, ContainerGpuConfig, ContainerStartupConfig, ImageBuildConfig, ImageBuildContextFile, ImageProfileRecord, PersistedState, PiBoxConfig } from "./types.js";
 import { notFound } from "./errors.js";
 
 const INITIAL_STATE: PersistedState = { version: 2, boxes: [], sessions: [], imageProfiles: [] };
+const MAX_SESSION_NOTICES = 200;
 
 class Mutex {
   private queue = Promise.resolve();
@@ -169,6 +170,23 @@ export class Store {
     });
   }
 
+  async appendSessionNotice(id: string, notice: AgentSessionNotice): Promise<AgentSessionRecord> {
+    return this.mutex.run(async () => {
+      const idx = this.state.sessions.findIndex((s) => s.id === id);
+      if (idx < 0) throw notFound("session");
+      const current = this.state.sessions[idx];
+      const next = normalizeSession({
+        ...current,
+        notices: normalizeSessionNotices([...(current.notices ?? []), notice]),
+        lastActiveAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString()
+      });
+      this.state.sessions[idx] = next;
+      await this.persist(this.state);
+      return next;
+    });
+  }
+
   async deleteSession(id: string): Promise<void> {
     return this.mutex.run(async () => {
       this.state.sessions = this.state.sessions.filter((s) => s.id !== id);
@@ -264,7 +282,32 @@ function normalizeSession(session: AgentSessionRecord): AgentSessionRecord {
     cwd: normalizeSessionCwd(session.cwd),
     autoCompactionEnabled: session.autoCompactionEnabled ?? true,
     launchArgs: normalizeLaunchArgs(session.launchArgs),
-    loadedResources: kind === "chat" ? loadedResources : undefined
+    loadedResources: kind === "chat" ? loadedResources : undefined,
+    notices: kind === "chat" ? normalizeSessionNotices(session.notices) : undefined
+  };
+}
+
+function normalizeSessionNotices(value?: AgentSessionNotice[]): AgentSessionNotice[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const notices = value
+    .map((notice) => normalizeSessionNotice(notice))
+    .filter((notice): notice is AgentSessionNotice => Boolean(notice))
+    .slice(-MAX_SESSION_NOTICES);
+  return notices.length ? notices : undefined;
+}
+
+function normalizeSessionNotice(notice: AgentSessionNotice): AgentSessionNotice | undefined {
+  if (!notice || typeof notice !== "object") return undefined;
+  const message = typeof notice.message === "string" ? notice.message : "";
+  if (!message.trim()) return undefined;
+  const timestamp = typeof notice.timestamp === "string" && notice.timestamp.trim() ? notice.timestamp : new Date().toISOString();
+  return {
+    id: typeof notice.id === "string" && notice.id.trim() ? notice.id : randomUUID(),
+    kind: notice.kind === "extension_notify" ? "extension_notify" : "extension_notify",
+    title: typeof notice.title === "string" && notice.title.trim() ? notice.title.trim() : "extension info",
+    message,
+    notifyType: typeof notice.notifyType === "string" && notice.notifyType.trim() ? notice.notifyType.trim() : undefined,
+    timestamp
   };
 }
 
